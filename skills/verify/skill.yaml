@@ -1,7 +1,7 @@
 apiVersion: skillimage.io/v1alpha1
 kind: SkillCard
 metadata:
-  name: verify-java
+  name: verify
   namespace: konveyor
   version: "1.0.0"
   description: >

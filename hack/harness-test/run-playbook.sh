@@ -49,8 +49,8 @@ fi
 
 STAGE_AGENTS=(
     "plan:migration-plan-agent"
-    "execute:migration-execute-java"
-    "verify:migration-verify-java"
+    "execute:migration-execute-agent"
+    "verify:migration-verify-agent"
 )
 
 STAGE_INSTRUCTIONS=(

@@ -1,7 +1,7 @@
 apiVersion: skillimage.io/v1alpha1
 kind: SkillCard
 metadata:
-  name: execute-java
+  name: execute
   namespace: konveyor
   version: "1.0.0"
   description: >

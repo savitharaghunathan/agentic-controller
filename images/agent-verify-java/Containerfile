@@ -1,8 +1,0 @@
-# agent-verify-java: Verify stage image for Java migrations.
-#
-# Build context must be the repository root:
-#   podman build -t agent-verify-java -f images/agent-verify-java/Containerfile .
-
-FROM agent-java-base
-
-COPY skills/verify-java/ /opt/skills/verify/

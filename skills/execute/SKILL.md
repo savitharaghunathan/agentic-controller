@@ -1,5 +1,5 @@
 ---
-name: execute-java
+name: execute
 description: >
   Reads PLAN.md and executes each migration step sequentially for Java EE to
   Quarkus 3 migrations. Applies transformations file by file using the bundled

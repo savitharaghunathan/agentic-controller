@@ -103,8 +103,8 @@ CONTROLLER_AGENT_IMG ?= quay.io/konveyor/agentic-controller-agent:latest
 AGENT_BASE_IMG ?= quay.io/konveyor/agent-base:latest
 AGENT_JAVA_BASE_IMG ?= quay.io/konveyor/agent-java-base:latest
 AGENT_PLAN_IMG ?= quay.io/konveyor/agent-plan:latest
-AGENT_EXECUTE_JAVA_IMG ?= quay.io/konveyor/agent-execute-java:latest
-AGENT_VERIFY_JAVA_IMG ?= quay.io/konveyor/agent-verify-java:latest
+AGENT_EXECUTE_IMG ?= quay.io/konveyor/agent-execute:latest
+AGENT_VERIFY_IMG ?= quay.io/konveyor/agent-verify:latest
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
@@ -130,23 +130,23 @@ agent-java-base-build: agent-base-build ## Build the shared Java base image (JDK
 agent-plan-build: agent-base-build ## Build the plan stage agent image.
 	$(CONTAINER_TOOL) build -t $(AGENT_PLAN_IMG) -f images/agent-plan/Containerfile .
 
-.PHONY: agent-execute-java-build
-agent-execute-java-build: agent-java-base-build ## Build the Java execute stage agent image.
-	$(CONTAINER_TOOL) build -t $(AGENT_EXECUTE_JAVA_IMG) -f images/agent-execute-java/Containerfile .
+.PHONY: agent-execute-build
+agent-execute-build: agent-java-base-build ## Build the execute stage agent image.
+	$(CONTAINER_TOOL) build -t $(AGENT_EXECUTE_IMG) -f images/agent-execute/Containerfile .
 
-.PHONY: agent-verify-java-build
-agent-verify-java-build: agent-java-base-build ## Build the Java verify stage agent image.
-	$(CONTAINER_TOOL) build -t $(AGENT_VERIFY_JAVA_IMG) -f images/agent-verify-java/Containerfile .
+.PHONY: agent-verify-build
+agent-verify-build: agent-java-base-build ## Build the verify stage agent image.
+	$(CONTAINER_TOOL) build -t $(AGENT_VERIFY_IMG) -f images/agent-verify/Containerfile .
 
 .PHONY: agent-images-build
-agent-images-build: agent-plan-build agent-execute-java-build agent-verify-java-build ## Build all stage agent images.
+agent-images-build: agent-plan-build agent-execute-build agent-verify-build ## Build all stage agent images.
 
 .PHONY: agent-images-push
 agent-images-push: agent-images-build ## Build and push all stage agent images.
 	$(CONTAINER_TOOL) push $(AGENT_BASE_IMG)
 	$(CONTAINER_TOOL) push $(AGENT_PLAN_IMG)
-	$(CONTAINER_TOOL) push $(AGENT_EXECUTE_JAVA_IMG)
-	$(CONTAINER_TOOL) push $(AGENT_VERIFY_JAVA_IMG)
+	$(CONTAINER_TOOL) push $(AGENT_EXECUTE_IMG)
+	$(CONTAINER_TOOL) push $(AGENT_VERIFY_IMG)
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.

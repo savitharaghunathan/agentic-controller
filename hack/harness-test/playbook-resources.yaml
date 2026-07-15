@@ -27,9 +27,9 @@ spec:
 apiVersion: konveyor.io/v1alpha1
 kind: Agent
 metadata:
-  name: migration-execute-java
+  name: migration-execute-agent
 spec:
-  image: quay.io/konveyor/agent-execute-java:dev
+  image: quay.io/konveyor/agent-execute:dev
   providers:
     - ref: gcp-vertex-ai
   params:
@@ -41,9 +41,9 @@ spec:
 apiVersion: konveyor.io/v1alpha1
 kind: Agent
 metadata:
-  name: migration-verify-java
+  name: migration-verify-agent
 spec:
-  image: quay.io/konveyor/agent-verify-java:dev
+  image: quay.io/konveyor/agent-verify:dev
   providers:
     - ref: gcp-vertex-ai
   params:
@@ -66,10 +66,10 @@ spec:
       agentRef: migration-plan-agent
       instructions: "Analyze the project structure using graphify and produce PLAN.md with migration steps"
     - name: execute
-      agentRef: migration-execute-java
+      agentRef: migration-execute-agent
       instructions: "Execute each step in PLAN.md to migrate the code from Java EE to Quarkus"
     - name: verify
-      agentRef: migration-verify-java
+      agentRef: migration-verify-agent
       instructions: "Run mvn clean compile, fix any compilation errors, then run tests"
 
 ---

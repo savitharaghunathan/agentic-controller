@@ -1,5 +1,5 @@
 ---
-name: verify-java
+name: verify
 description: >
   Runs mvn clean compile, parses compiler errors, applies conservative fixes,
   and iterates until the build passes or max iterations are reached. Handles
