@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const testQuietPeriod = 1 * time.Second
+
 func TestWatcherDetectsFileChange(t *testing.T) {
 	dir := t.TempDir()
 
@@ -29,6 +31,7 @@ func TestWatcherDetectsFileChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.WithQuietPeriod(testQuietPeriod)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -42,7 +45,7 @@ func TestWatcherDetectsFileChange(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "App.java"), "class App { int x; }")
 
 	// Wait for quiet period + buffer
-	time.Sleep(quietPeriod + 5*time.Second)
+	time.Sleep(testQuietPeriod + 2*time.Second)
 
 	if commitCount.Load() == 0 {
 		t.Error("expected at least one commit after quiet period")
@@ -66,6 +69,7 @@ func TestWatcherIgnoresExcludedDirs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.WithQuietPeriod(testQuietPeriod)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -80,7 +84,7 @@ func TestWatcherIgnoresExcludedDirs(t *testing.T) {
 	os.MkdirAll(gooseDir, 0755)
 	writeFile(t, filepath.Join(gooseDir, "cache.db"), "data")
 
-	time.Sleep(quietPeriod + 5*time.Second)
+	time.Sleep(testQuietPeriod + 2*time.Second)
 
 	if commitCount.Load() != 0 {
 		t.Error("expected no commits for changes in excluded dirs")

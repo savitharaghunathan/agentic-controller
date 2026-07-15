@@ -20,6 +20,7 @@ func TestShouldStageNewFile(t *testing.T) {
 		{"file.swp", false},
 		{"random.txt", false},
 		{"src/main/java/.goose/internal.java", false},
+		{"graphify-out/model/graph.json", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
