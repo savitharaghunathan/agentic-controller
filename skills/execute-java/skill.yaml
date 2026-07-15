@@ -1,0 +1,16 @@
+apiVersion: skillimage.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: execute-java
+  namespace: konveyor
+  version: "1.0.0"
+  description: >
+    Reads PLAN.md and executes each migration step sequentially for Java
+    projects. Applies Java EE to Quarkus transformations file by file.
+  tags:
+    - java
+    - migration
+    - quarkus
+    - execution
+spec:
+  prompt: SKILL.md
