@@ -1,0 +1,8 @@
+# agent-execute-java: Execute stage image for Java migrations.
+#
+# Build context must be the repository root:
+#   podman build -t agent-execute-java -f images/agent-execute-java/Containerfile .
+
+FROM agent-java-base
+
+COPY skills/execute-java/ /opt/skills/execute/
