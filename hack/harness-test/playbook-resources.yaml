@@ -1,0 +1,99 @@
+# Example resources for testing the AgentPlaybook + AgentPlaybookRun flow.
+# Migrates the coolstore Java EE app to Quarkus using 3 stages.
+#
+# Prerequisites:
+#   - LLMProvider "gcp-vertex-ai" from resources.yaml
+#   - git-credentials Secret from setup.sh
+#
+# Usage:
+#   kubectl apply -f hack/harness-test/resources.yaml
+#   kubectl apply -f hack/harness-test/playbook-resources.yaml
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: Agent
+metadata:
+  name: migration-plan-agent
+spec:
+  image: quay.io/konveyor/agent-plan:dev
+  providers:
+    - ref: gcp-vertex-ai
+  params:
+    - name: max_turns
+      type: number
+      default: "200"
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: Agent
+metadata:
+  name: migration-execute-java
+spec:
+  image: quay.io/konveyor/agent-execute-java:dev
+  providers:
+    - ref: gcp-vertex-ai
+  params:
+    - name: max_turns
+      type: number
+      default: "200"
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: Agent
+metadata:
+  name: migration-verify-java
+spec:
+  image: quay.io/konveyor/agent-verify-java:dev
+  providers:
+    - ref: gcp-vertex-ai
+  params:
+    - name: max_turns
+      type: number
+      default: "200"
+    - name: max_fix_iterations
+      type: number
+      default: "3"
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: AgentPlaybook
+metadata:
+  name: java-ee-to-quarkus
+spec:
+  guide: "Migrate a Java EE application to Quarkus 3"
+  stages:
+    - name: plan
+      agentRef: migration-plan-agent
+      instructions: "Analyze the project structure using graphify and produce PLAN.md with migration steps"
+    - name: execute
+      agentRef: migration-execute-java
+      instructions: "Execute each step in PLAN.md to migrate the code from Java EE to Quarkus"
+    - name: verify
+      agentRef: migration-verify-java
+      instructions: "Run mvn clean compile, fix any compilation errors, then run tests"
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: AgentPlaybookRun
+metadata:
+  name: coolstore-migration
+spec:
+  playbookRef: java-ee-to-quarkus
+  models:
+    - role: primary
+      provider: gcp-vertex-ai
+      model: claude-sonnet-4-5
+  env:
+    - name: GIT_REPO_URL
+      value: "https://github.com/savitharaghunathan/coolstore.git"
+    - name: GIT_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: git-credentials
+          key: token
+    - name: GIT_TARGET_BRANCH
+      value: "konveyor/coolstore-migration"
+    - name: GCP_PROJECT_ID
+      value: "__GCP_PROJECT_ID__"
+    - name: GCP_LOCATION
+      value: "global"

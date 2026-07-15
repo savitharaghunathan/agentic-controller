@@ -3,7 +3,6 @@
 #
 # Prerequisites:
 #   - Kind cluster running (make e2e-setup)
-#   - agent-base-goose-java image loaded into Kind
 #
 # Usage:
 #   hack/harness-test/setup.sh
@@ -12,6 +11,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+CONTAINER_TOOL="${CONTAINER_TOOL:-podman}"
+KIND_CLUSTER="${KIND_CLUSTER:-agentic-controller-e2e}"
 
 echo "=== Creating secrets ==="
 
@@ -39,22 +41,29 @@ kubectl create secret generic git-credentials \
 echo "  git-credentials created"
 
 echo ""
-echo "=== Loading harness image into Kind ==="
-CONTAINER_TOOL="${CONTAINER_TOOL:-podman}"
-KIND_CLUSTER="${KIND_CLUSTER:-agentic-controller-e2e}"
+echo "=== Building agent images ==="
+make -C "$REPO_ROOT" agent-images-build CONTAINER_TOOL="$CONTAINER_TOOL"
 
-HARNESS_IMG="quay.io/konveyor/agent-base-goose-java"
-make -C "$REPO_ROOT" agent-java-goose-build CONTAINER_TOOL="$CONTAINER_TOOL"
-$CONTAINER_TOOL tag "${HARNESS_IMG}:latest" "${HARNESS_IMG}:dev"
+echo ""
+echo "=== Loading images into Kind ==="
 
-if [ "$CONTAINER_TOOL" = "podman" ]; then
-    $CONTAINER_TOOL save "${HARNESS_IMG}:dev" -o /tmp/harness-image.tar
-    KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/harness-image.tar --name "$KIND_CLUSTER"
-    rm -f /tmp/harness-image.tar
-else
-    kind load docker-image "${HARNESS_IMG}:dev" --name "$KIND_CLUSTER"
-fi
-echo "  image loaded"
+IMAGES=(
+    "quay.io/konveyor/agent-plan"
+    "quay.io/konveyor/agent-execute-java"
+    "quay.io/konveyor/agent-verify-java"
+)
+
+for IMG in "${IMAGES[@]}"; do
+    $CONTAINER_TOOL tag "${IMG}:latest" "${IMG}:dev"
+    if [ "$CONTAINER_TOOL" = "podman" ]; then
+        $CONTAINER_TOOL save "${IMG}:dev" -o /tmp/agent-image.tar
+        KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/agent-image.tar --name "$KIND_CLUSTER"
+        rm -f /tmp/agent-image.tar
+    else
+        kind load docker-image "${IMG}:dev" --name "$KIND_CLUSTER"
+    fi
+    echo "  loaded ${IMG}:dev"
+done
 
 echo ""
 echo "=== Applying resources ==="
@@ -65,9 +74,10 @@ if [ -z "$GCP_PROJECT_ID" ]; then
 fi
 echo "  GCP project: $GCP_PROJECT_ID"
 sed "s/__GCP_PROJECT_ID__/$GCP_PROJECT_ID/" "$SCRIPT_DIR/resources.yaml" | kubectl apply -f -
+sed "s/__GCP_PROJECT_ID__/$GCP_PROJECT_ID/" "$SCRIPT_DIR/playbook-resources.yaml" | kubectl apply -f -
 
 echo ""
 echo "=== Done ==="
-echo "Watch the run: kubectl get agentrun coolstore-migration -w"
+echo "Watch the run: kubectl get agentplaybookrun coolstore-migration -w"
 echo "Check pods:    kubectl get pods"
-echo "View logs:     kubectl logs -f coolstore-migration -c agent"
+echo "View logs:     kubectl logs -f <pod-name> -c agent"
