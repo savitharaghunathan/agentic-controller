@@ -72,7 +72,7 @@ if [ -z "$GCP_PROJECT_ID" ]; then
     echo "ERROR: No GCP project set. Run: gcloud config set project <project-id>"
     exit 1
 fi
-echo "  GCP project: $GCP_PROJECT_ID"
+echo "  GCP project: (set)"
 sed "s/__GCP_PROJECT_ID__/$GCP_PROJECT_ID/" "$SCRIPT_DIR/resources.yaml" | kubectl apply -f -
 sed "s/__GCP_PROJECT_ID__/$GCP_PROJECT_ID/" "$SCRIPT_DIR/playbook-resources.yaml" | kubectl apply -f -
 
