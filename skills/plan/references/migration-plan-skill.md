@@ -50,12 +50,12 @@ Parse the goal statement to extract:
 - **Target state** — what does "done" look like?
 - **Constraints** — anything to preserve, avoid, or be careful about?
 
-**Check if we have a reference for this**:
-- Java EE → Quarkus? → references/javaee-quarkus.md
-- Spring Boot 2 → 3? → references/springboot-2-to-3.md
-- .NET Framework → .NET 8? → references/dotnet-framework-to-core.md
-- Python 2 → 3? → references/python2-to-python3.md
-- Something else? → Proceed with generic planning (use migration-phases.md)
+**Check for domain-specific reference files in loaded migration skills**:
+```bash
+ls /opt/skills/*/references/*.md
+```
+Read the matching reference based on the detected project type.
+If no reference matches, proceed with generic planning (use migration-phases.md as guide).
 
 This helps you know what patterns to look for in Phase 2.
 
@@ -107,15 +107,7 @@ cat graph.json  # May be large - read selectively if needed
        - "annotations contains @MessageDriven"
    ```
 
-4. **Read the matching reference** using developer tools:
-   ```bash
-   cat references/javaee-quarkus.md
-   # OR
-   cat references/springboot-2-to-3.md
-   # OR
-   cat references/dotnet-framework-to-core.md
-   # etc.
-   ```
+4. **Read the matching reference file from the loaded migration skill**.
 
 5. **If no reference matches**, proceed with generic migration planning (use migration-phases.md as guide).
 

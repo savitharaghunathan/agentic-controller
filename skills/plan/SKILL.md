@@ -100,7 +100,7 @@ Read `graph.json` to understand the project architecture:
 
 Check which migration patterns exist in the graph:
 
-**Example (Java EE → Quarkus)**:
+**Example (if a Java EE migration skill is loaded)**:
 - Look for nodes where `attrs.annotations` contains `@MessageDriven` → Mark as COMPLEX
 - Look for nodes where `attrs.imports` contains `javax.ejb` → EJB conversion needed
 - Count nodes where `attrs.imports` contains `javax.persistence` → simple import replacement

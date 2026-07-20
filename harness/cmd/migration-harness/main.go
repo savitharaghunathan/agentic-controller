@@ -12,6 +12,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	gogit "github.com/go-git/go-git/v5"
+
 	"github.com/konveyor/migration-harness/internal/acp"
 	"github.com/konveyor/migration-harness/internal/config"
 	"github.com/konveyor/migration-harness/internal/git"
@@ -105,13 +107,13 @@ func runStage(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create session: %w", err)
 	}
 
-	// 6. Discover skill
-	skillContent, err := discoverSkill()
+	// 6. Discover skills
+	skillContent, skillPaths, err := discoverSkills()
 	if err != nil {
-		return fmt.Errorf("discover skill: %w", err)
+		return fmt.Errorf("discover skills: %w", err)
 	}
 
-	// 7. Build prompt from 4 context layers
+	// 7. Build prompt from context layers
 	prompt := buildPrompt(skillContent)
 
 	// 8. Start filesystem watcher BEFORE blocking prompt
@@ -149,7 +151,12 @@ func runStage(cmd *cobra.Command, args []string) error {
 	w.Stop()
 
 	// 11. Read result.json for exit status
-	exitCode := readResultStatus(cloneDir)
+	result, exitCode := readResultStatus(cloneDir)
+
+	// 11b. Write handoff.md for next stage
+	if err := writeHandoff(cloneDir, skillPaths, result, repo); err != nil {
+		logging.Warn("handoff: %v", err)
+	}
 
 	// 12. Final commit + push
 	logging.Header("Final Push")
@@ -169,23 +176,38 @@ func runStage(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func discoverSkill() (string, error) {
-	matches, err := filepath.Glob("/opt/skills/*/SKILL.md")
+const defaultSkillsDir = "/opt/skills"
+
+func skillsDir() string {
+	if v := os.Getenv("HARNESS_SKILLS_DIR"); v != "" {
+		return v
+	}
+	return defaultSkillsDir
+}
+
+func discoverSkills() (string, []string, error) {
+	pattern := filepath.Join(skillsDir(), "*/SKILL.md")
+	matches, err := filepath.Glob(pattern)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if len(matches) == 0 {
-		return "", fmt.Errorf("no skill found at /opt/skills/*/SKILL.md")
+		return "", nil, fmt.Errorf("no skills found at %s", pattern)
 	}
-	if len(matches) > 1 {
-		return "", fmt.Errorf("expected exactly one skill, found %d: %v", len(matches), matches)
+
+	var combined strings.Builder
+	for i, m := range matches {
+		content, err := os.ReadFile(m)
+		if err != nil {
+			return "", nil, fmt.Errorf("read skill %s: %w", m, err)
+		}
+		logging.Info("discovered skill: %s", m)
+		if i > 0 {
+			combined.WriteString("\n\n---\n\n")
+		}
+		combined.Write(content)
 	}
-	content, err := os.ReadFile(matches[0])
-	if err != nil {
-		return "", fmt.Errorf("read skill %s: %w", matches[0], err)
-	}
-	logging.Info("discovered skill: %s", matches[0])
-	return string(content), nil
+	return combined.String(), matches, nil
 }
 
 func buildPrompt(skillContent string) string {
@@ -220,30 +242,95 @@ type stageResult struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-func readResultStatus(workDir string) int {
+func readResultStatus(workDir string) (stageResult, int) {
 	path := filepath.Join(workDir, ".konveyor", "result.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		logging.Warn("no result.json found — treating as failure")
-		return 1
+		return stageResult{Stage: "unknown", Status: "failed", Reason: "no result.json"}, 1
 	}
 
 	var results []stageResult
 	if err := json.Unmarshal(data, &results); err != nil {
 		logging.Warn("invalid result.json: %v", err)
-		return 1
+		return stageResult{Stage: "unknown", Status: "failed", Reason: "invalid result.json"}, 1
 	}
 
 	if len(results) == 0 {
 		logging.Warn("result.json is empty — treating as failure")
-		return 1
+		return stageResult{Stage: "unknown", Status: "failed", Reason: "empty result.json"}, 1
 	}
 
 	last := results[len(results)-1]
 	if last.Status == "succeeded" {
-		return 0
+		return last, 0
 	}
 
 	logging.Err("stage %s failed: %s", last.Stage, last.Reason)
-	return 1
+	return last, 1
+}
+
+func writeHandoff(workDir string, skills []string, result stageResult, repo *gogit.Repository) error {
+	handoffPath := filepath.Join(workDir, ".konveyor", "handoff.md")
+	if err := os.MkdirAll(filepath.Dir(handoffPath), 0o755); err != nil {
+		return fmt.Errorf("create .konveyor dir: %w", err)
+	}
+
+	// Read existing handoff content from prior stages
+	existing, _ := os.ReadFile(handoffPath)
+
+	var b strings.Builder
+
+	if len(existing) > 0 {
+		b.Write(existing)
+		b.WriteString("\n---\n\n")
+	}
+
+	fmt.Fprintf(&b, "## Stage: %s\n\n", result.Stage)
+	fmt.Fprintf(&b, "**Status:** %s\n", result.Status)
+	fmt.Fprintf(&b, "**Completed:** %s\n", time.Now().UTC().Format(time.RFC3339))
+	if result.Reason != "" {
+		fmt.Fprintf(&b, "**Reason:** %s\n", result.Reason)
+	}
+
+	b.WriteString("\n### Skills Loaded\n\n")
+	for _, s := range skills {
+		fmt.Fprintf(&b, "- %s\n", s)
+	}
+
+	if changed := changedFiles(repo); len(changed) > 0 {
+		b.WriteString("\n### Files Changed\n\n")
+		for _, f := range changed {
+			fmt.Fprintf(&b, "- %s\n", f)
+		}
+	}
+
+	if v := os.Getenv("KONVEYOR_INSTRUCTIONS"); v != "" {
+		b.WriteString("\n### Instructions\n\n")
+		b.WriteString(v)
+		b.WriteString("\n")
+	}
+
+	if err := os.WriteFile(handoffPath, []byte(b.String()), 0o644); err != nil {
+		return fmt.Errorf("write handoff.md: %w", err)
+	}
+
+	logging.Ok("wrote %s", handoffPath)
+	return nil
+}
+
+func changedFiles(repo *gogit.Repository) []string {
+	wt, err := repo.Worktree()
+	if err != nil {
+		return nil
+	}
+	status, err := wt.Status()
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for path := range status {
+		files = append(files, path)
+	}
+	return files
 }

@@ -1,7 +1,5 @@
-# agent-plan: Plan stage image. Adds graphify for code graph generation.
-#
-# Build context must be the repository root:
-#   podman build -t agent-plan -f images/agent-plan/Containerfile .
+# agent-plan: Plan stage toolchain image. Adds graphify for code graph
+# generation. Skill content comes from SkillCards mounted at runtime.
 
 FROM agent-base AS base
 
@@ -20,8 +18,6 @@ RUN dnf install -y \
 RUN python3 -m pip install --no-cache-dir graphifyy==0.7.17
 
 ENV PYTHONUNBUFFERED=1
-
-COPY skills/plan/ /opt/skills/plan/
 
 USER harness
 

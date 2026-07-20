@@ -1,8 +1,4 @@
-# agent-execute: Execute stage image for Java migrations.
-#
-# Build context must be the repository root:
-#   podman build -t agent-execute -f images/agent-execute/Containerfile .
+# agent-execute: Execute stage toolchain image. Skill content comes
+# from SkillCards mounted at runtime.
 
 FROM agent-java-base
-
-COPY skills/execute/ /opt/skills/execute/

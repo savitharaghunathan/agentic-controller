@@ -5,12 +5,11 @@ metadata:
   namespace: konveyor
   version: "1.0.0"
   description: >
-    Reads PLAN.md and executes each migration step sequentially for Java
-    projects. Applies Java EE to Quarkus transformations file by file.
+    Reads PLAN.md and executes each migration step sequentially. Applies
+    transformations file by file, consulting domain-specific patterns from
+    loaded migration skills.
   tags:
-    - java
     - migration
-    - quarkus
     - execution
 spec:
   prompt: SKILL.md
