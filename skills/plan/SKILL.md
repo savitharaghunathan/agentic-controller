@@ -237,13 +237,13 @@ and write it back. If it does not exist, create it with a single-entry array.
 Your entry:
 
 ```json
-{"stage": "plan", "status": "succeeded"}
+{"stage": "plan", "status": "succeeded", "summary": "<1-2 sentences: what you found and what the plan covers>"}
 ```
 
 Or on failure:
 
 ```json
-{"stage": "plan", "status": "failed", "reason": "<what went wrong>"}
+{"stage": "plan", "status": "failed", "reason": "<what went wrong>", "summary": "<what was attempted>"}
 ```
 
 ---

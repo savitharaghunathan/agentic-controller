@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -237,9 +239,10 @@ func buildPrompt(skillContent string) string {
 }
 
 type stageResult struct {
-	Stage  string `json:"stage"`
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
+	Stage   string `json:"stage"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 func readResultStatus(workDir string) (stageResult, int) {
@@ -270,13 +273,16 @@ func readResultStatus(workDir string) (stageResult, int) {
 	return last, 1
 }
 
+func skillName(path string) string {
+	return filepath.Base(filepath.Dir(path))
+}
+
 func writeHandoff(workDir string, skills []string, result stageResult, repo *gogit.Repository) error {
 	handoffPath := filepath.Join(workDir, ".konveyor", "handoff.md")
 	if err := os.MkdirAll(filepath.Dir(handoffPath), 0o755); err != nil {
 		return fmt.Errorf("create .konveyor dir: %w", err)
 	}
 
-	// Read existing handoff content from prior stages
 	existing, _ := os.ReadFile(handoffPath)
 
 	var b strings.Builder
@@ -287,28 +293,34 @@ func writeHandoff(workDir string, skills []string, result stageResult, repo *gog
 	}
 
 	fmt.Fprintf(&b, "## Stage: %s\n\n", result.Stage)
-	fmt.Fprintf(&b, "**Status:** %s\n", result.Status)
+	fmt.Fprintf(&b, "**Status:** %s  \n", result.Status)
 	fmt.Fprintf(&b, "**Completed:** %s\n", time.Now().UTC().Format(time.RFC3339))
 	if result.Reason != "" {
 		fmt.Fprintf(&b, "**Reason:** %s\n", result.Reason)
 	}
 
-	b.WriteString("\n### Skills Loaded\n\n")
-	for _, s := range skills {
-		fmt.Fprintf(&b, "- %s\n", s)
+	if result.Summary != "" {
+		b.WriteString("\n### Summary\n\n")
+		b.WriteString(result.Summary)
+		b.WriteString("\n")
 	}
 
-	if changed := changedFiles(repo); len(changed) > 0 {
-		b.WriteString("\n### Files Changed\n\n")
-		for _, f := range changed {
-			fmt.Fprintf(&b, "- %s\n", f)
+	b.WriteString("\n### Skills\n\n")
+	for _, s := range skills {
+		fmt.Fprintf(&b, "- %s\n", skillName(s))
+	}
+
+	if result.Stage == "plan" {
+		if steps := planSteps(workDir); len(steps) > 0 {
+			b.WriteString("\n### Migration Steps (from PLAN.md)\n\n")
+			for _, s := range steps {
+				fmt.Fprintf(&b, "- %s\n", s)
+			}
 		}
 	}
 
-	if v := os.Getenv("KONVEYOR_INSTRUCTIONS"); v != "" {
-		b.WriteString("\n### Instructions\n\n")
-		b.WriteString(v)
-		b.WriteString("\n")
+	if n := changedFileCount(repo); n > 0 {
+		fmt.Fprintf(&b, "\n**Files changed:** %d\n", n)
 	}
 
 	if err := os.WriteFile(handoffPath, []byte(b.String()), 0o644); err != nil {
@@ -319,18 +331,49 @@ func writeHandoff(workDir string, skills []string, result stageResult, repo *gog
 	return nil
 }
 
-func changedFiles(repo *gogit.Repository) []string {
+var excludeDirs = []string{"graphify-out/", ".konveyor/", "target/", ".git/"}
+
+func changedFileCount(repo *gogit.Repository) int {
 	wt, err := repo.Worktree()
 	if err != nil {
-		return nil
+		return 0
 	}
 	status, err := wt.Status()
 	if err != nil {
+		return 0
+	}
+	n := 0
+	for path := range status {
+		excluded := false
+		for _, prefix := range excludeDirs {
+			if strings.HasPrefix(path, prefix) {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			n++
+		}
+	}
+	return n
+}
+
+var stepRe = regexp.MustCompile(`^###\s+Step\s+\d+`)
+
+func planSteps(workDir string) []string {
+	f, err := os.Open(filepath.Join(workDir, "PLAN.md"))
+	if err != nil {
 		return nil
 	}
-	var files []string
-	for path := range status {
-		files = append(files, path)
+	defer f.Close()
+	var steps []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		if stepRe.MatchString(line) {
+			title := strings.TrimPrefix(line, "### ")
+			steps = append(steps, title)
+		}
 	}
-	return files
+	return steps
 }

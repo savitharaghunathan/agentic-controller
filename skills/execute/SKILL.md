@@ -64,13 +64,13 @@ JSON array, append your entry, and write it back.
 Your entry:
 
 ```json
-{"stage": "execute", "status": "succeeded"}
+{"stage": "execute", "status": "succeeded", "summary": "<1-2 sentences: what was migrated and how many steps completed>"}
 ```
 
 Or on failure:
 
 ```json
-{"stage": "execute", "status": "failed", "reason": "<what went wrong>"}
+{"stage": "execute", "status": "failed", "reason": "<what went wrong>", "summary": "<what was completed before failure>"}
 ```
 
 ## Important

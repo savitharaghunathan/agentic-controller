@@ -81,13 +81,13 @@ parse the JSON array, append your entry, and write it back.
 Your entry on success:
 
 ```json
-{"stage": "verify", "status": "succeeded"}
+{"stage": "verify", "status": "succeeded", "summary": "<1-2 sentences: build/test results and any fixes applied>"}
 ```
 
 On failure:
 
 ```json
-{"stage": "verify", "status": "failed", "reason": "build failed after N fix iterations: <remaining errors>"}
+{"stage": "verify", "status": "failed", "reason": "build failed after N fix iterations: <remaining errors>", "summary": "<what was tried and what errors remain>"}
 ```
 
 ---
