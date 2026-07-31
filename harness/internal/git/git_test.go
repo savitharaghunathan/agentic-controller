@@ -63,44 +63,6 @@ func seedBareRepo(t *testing.T, remoteDir string) {
 	}
 }
 
-func TestCommitAllCleanIsNoop(t *testing.T) {
-	remoteDir, _ := setupBareRemote(t)
-	seedBareRepo(t, remoteDir)
-	_, repo := cloneLocal(t, remoteDir)
-
-	hash, err := CommitAll(repo, "should not commit")
-	if err != nil {
-		t.Fatalf("CommitAll: %v", err)
-	}
-	if hash != plumbing.ZeroHash {
-		t.Errorf("expected zero hash for clean tree, got %s", hash)
-	}
-}
-
-func TestCommitAllWithChanges(t *testing.T) {
-	remoteDir, _ := setupBareRemote(t)
-	seedBareRepo(t, remoteDir)
-	cloneDir, repo := cloneLocal(t, remoteDir)
-
-	os.WriteFile(filepath.Join(cloneDir, "new-file.txt"), []byte("hello\n"), 0644)
-
-	hash, err := CommitAll(repo, "add new file")
-	if err != nil {
-		t.Fatalf("CommitAll: %v", err)
-	}
-	if hash == plumbing.ZeroHash {
-		t.Error("expected non-zero hash for commit with changes")
-	}
-
-	commit, err := repo.CommitObject(hash)
-	if err != nil {
-		t.Fatalf("get commit: %v", err)
-	}
-	if commit.Message != "add new file" {
-		t.Errorf("message = %q, want %q", commit.Message, "add new file")
-	}
-}
-
 func TestCheckoutBranch(t *testing.T) {
 	remoteDir, _ := setupBareRemote(t)
 	seedBareRepo(t, remoteDir)
@@ -116,6 +78,49 @@ func TestCheckoutBranch(t *testing.T) {
 	}
 	if head.Name() != plumbing.NewBranchReferenceName("feature-branch") {
 		t.Errorf("branch = %s, want feature-branch", head.Name())
+	}
+}
+
+func TestCheckoutBranchFromRemote(t *testing.T) {
+	remoteDir, _ := setupBareRemote(t)
+	seedBareRepo(t, remoteDir)
+
+	// Push a file to a branch on the remote via a temporary clone.
+	tmpDir := filepath.Join(t.TempDir(), "pusher")
+	pusher, err := gogit.PlainClone(tmpDir, false, &gogit.CloneOptions{URL: remoteDir})
+	if err != nil {
+		t.Fatalf("clone for push: %v", err)
+	}
+	wt, _ := pusher.Worktree()
+	wt.Checkout(&gogit.CheckoutOptions{Branch: plumbing.NewBranchReferenceName("remote-branch"), Create: true})
+	os.WriteFile(filepath.Join(tmpDir, "PLAN.md"), []byte("# Plan\n"), 0644)
+	wt.Add("PLAN.md")
+	wt.Commit("add plan", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
+	})
+	pusher.Push(&gogit.PushOptions{
+		RefSpecs: []gogitcfg.RefSpec{"refs/heads/remote-branch:refs/heads/remote-branch"},
+	})
+
+	// Fresh clone (only fetches default branch).
+	cloneDir := filepath.Join(t.TempDir(), "clone2")
+	repo, err := gogit.PlainClone(cloneDir, false, &gogit.CloneOptions{URL: remoteDir})
+	if err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+
+	// CheckoutBranch should resolve the remote tracking branch.
+	if err := CheckoutBranch(repo, "remote-branch"); err != nil {
+		t.Fatalf("CheckoutBranch: %v", err)
+	}
+
+	// Verify we got the remote content.
+	data, err := os.ReadFile(filepath.Join(cloneDir, "PLAN.md"))
+	if err != nil {
+		t.Fatalf("PLAN.md not found after checkout: %v", err)
+	}
+	if string(data) != "# Plan\n" {
+		t.Errorf("PLAN.md content = %q, want %q", string(data), "# Plan\n")
 	}
 }
 
@@ -147,9 +152,18 @@ func TestFullLifecycle(t *testing.T) {
 	}
 
 	os.WriteFile(filepath.Join(cloneDir, "migrated.java"), []byte("class Foo {}\n"), 0644)
-	hash, err := CommitAll(repo, "migrate: Foo.java")
+	wt, err := repo.Worktree()
 	if err != nil {
-		t.Fatalf("CommitAll: %v", err)
+		t.Fatalf("worktree: %v", err)
+	}
+	if _, err := wt.Add("migrated.java"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	hash, err := wt.Commit("migrate: Foo.java", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("commit: %v", err)
 	}
 	if hash == plumbing.ZeroHash {
 		t.Error("expected commit hash")
@@ -171,73 +185,6 @@ func TestFullLifecycle(t *testing.T) {
 	if ref.Hash() != hash {
 		t.Errorf("remote hash = %s, want %s", ref.Hash(), hash)
 	}
-}
-
-func TestReadFromEnv(t *testing.T) {
-	t.Run("no env returns nil", func(t *testing.T) {
-		os.Unsetenv("GIT_REPO_URL")
-		os.Unsetenv("GIT_TOKEN")
-		os.Unsetenv("GIT_USERNAME")
-		os.Unsetenv("GIT_TARGET_BRANCH")
-
-		cred, err := ReadFromEnv()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if cred != nil {
-			t.Error("expected nil credentials when GIT_REPO_URL is unset")
-		}
-	})
-
-	t.Run("repo url without token errors", func(t *testing.T) {
-		t.Setenv("GIT_REPO_URL", "https://github.com/org/repo.git")
-		t.Setenv("GIT_TOKEN", "")
-		os.Unsetenv("GIT_TOKEN")
-
-		_, err := ReadFromEnv()
-		if err == nil {
-			t.Error("expected error when GIT_TOKEN is missing")
-		}
-	})
-
-	t.Run("full env", func(t *testing.T) {
-		t.Setenv("GIT_REPO_URL", "https://github.com/org/repo.git")
-		t.Setenv("GIT_TOKEN", "ghp_test123")
-		t.Setenv("GIT_USERNAME", "myuser")
-		t.Setenv("GIT_TARGET_BRANCH", "my-branch")
-
-		cred, err := ReadFromEnv()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if cred.Username != "myuser" {
-			t.Errorf("Username = %q, want myuser", cred.Username)
-		}
-		if cred.Token != "ghp_test123" {
-			t.Errorf("Token = %q, want ghp_test123", cred.Token)
-		}
-		if cred.RepoURL != "https://github.com/org/repo.git" {
-			t.Errorf("RepoURL = %q", cred.RepoURL)
-		}
-		if cred.Branch != "my-branch" {
-			t.Errorf("Branch = %q, want my-branch", cred.Branch)
-		}
-	})
-
-	t.Run("default username", func(t *testing.T) {
-		t.Setenv("GIT_REPO_URL", "https://github.com/org/repo.git")
-		t.Setenv("GIT_TOKEN", "ghp_test123")
-		os.Unsetenv("GIT_USERNAME")
-		t.Setenv("GIT_TARGET_BRANCH", "br")
-
-		cred, err := ReadFromEnv()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if cred.Username != "x-access-token" {
-			t.Errorf("Username = %q, want x-access-token", cred.Username)
-		}
-	})
 }
 
 func TestPushWithoutCredsToStrippedRemoteFails(t *testing.T) {
@@ -262,11 +209,88 @@ func TestPushWithoutCredsToStrippedRemoteFails(t *testing.T) {
 	CheckoutBranch(repo, cred.Branch)
 
 	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("data\n"), 0644)
-	CommitAll(repo, "test commit")
+	wt, _ := repo.Worktree()
+	wt.Add("file.txt")
+	wt.Commit("test commit", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
+	})
 
 	// Push with nil credentials should fail
 	err = Push(ctx, &Credentials{RepoURL: remoteDir, Branch: cred.Branch}, repo, cred.Branch)
 	// For local bare repos, push still works without auth — this test verifies
 	// the function runs without panic. Real auth enforcement is server-side.
 	_ = err
+}
+
+func TestCommitFiles(t *testing.T) {
+	remoteDir, _ := setupBareRemote(t)
+	seedBareRepo(t, remoteDir)
+	cloneDir, repo := cloneLocal(t, remoteDir)
+
+	if err := ConfigureAuthor(repo); err != nil {
+		t.Fatalf("ConfigureAuthor: %v", err)
+	}
+	if err := CheckoutBranch(repo, "test-commit-files"); err != nil {
+		t.Fatalf("CheckoutBranch: %v", err)
+	}
+
+	os.WriteFile(filepath.Join(cloneDir, ".gitignore"), []byte("*.tmp\n"), 0644)
+	os.MkdirAll(filepath.Join(cloneDir, ".konveyor"), 0755)
+	os.WriteFile(filepath.Join(cloneDir, ".konveyor", "analysis.json"), []byte("{}\n"), 0644)
+
+	err := CommitFiles(repo, []string{".gitignore", ".konveyor/analysis.json"}, "harness: test commit")
+	if err != nil {
+		t.Fatalf("CommitFiles: %v", err)
+	}
+
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	commit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("CommitObject: %v", err)
+	}
+	if commit.Message != "harness: test commit" {
+		t.Errorf("commit message = %q, want %q", commit.Message, "harness: test commit")
+	}
+	if commit.Author.Name != "migration-agent" {
+		t.Errorf("author = %q, want %q", commit.Author.Name, "migration-agent")
+	}
+
+	tree, err := commit.Tree()
+	if err != nil {
+		t.Fatalf("Tree: %v", err)
+	}
+	if _, err := tree.File(".gitignore"); err != nil {
+		t.Error(".gitignore not in commit tree")
+	}
+	if _, err := tree.File(".konveyor/analysis.json"); err != nil {
+		t.Error(".konveyor/analysis.json not in commit tree")
+	}
+}
+
+func TestCommitFilesNoChanges(t *testing.T) {
+	remoteDir, _ := setupBareRemote(t)
+	seedBareRepo(t, remoteDir)
+	_, repo := cloneLocal(t, remoteDir)
+
+	if err := ConfigureAuthor(repo); err != nil {
+		t.Fatalf("ConfigureAuthor: %v", err)
+	}
+	if err := CheckoutBranch(repo, "test-no-changes"); err != nil {
+		t.Fatalf("CheckoutBranch: %v", err)
+	}
+
+	headBefore, _ := repo.Head()
+
+	err := CommitFiles(repo, []string{".gitignore", ".konveyor/analysis.json"}, "should not commit")
+	if err != nil {
+		t.Fatalf("CommitFiles: %v", err)
+	}
+
+	headAfter, _ := repo.Head()
+	if headBefore.Hash() != headAfter.Hash() {
+		t.Error("HEAD changed despite no files to commit")
+	}
 }

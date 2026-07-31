@@ -1,0 +1,18 @@
+# agent-go: Go agent image. Adds Go toolchain on top of agent-base.
+#
+# Build context must be the repository root:
+#   podman build -t agent-go -f images/agent-go/Containerfile .
+
+ARG BASE_IMAGE=quay.io/konveyor/agent-base:latest
+FROM ${BASE_IMAGE} AS base
+
+USER root
+
+RUN dnf install -y \
+    golang \
+    && dnf clean all
+
+USER 1001
+
+ENTRYPOINT ["migration-harness"]
+CMD ["run"]

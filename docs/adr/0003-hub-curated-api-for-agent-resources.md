@@ -1,6 +1,6 @@
 # ADR 0003: Hub Curated API for Agent Resources
 
-**Status:** Accepted
+**Status:** Superseded by ADR 0006
 **Date:** 2026-06-30
 **Authors:** David Zager
 

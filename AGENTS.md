@@ -64,8 +64,8 @@ Key terms to get right:
 1. **Controller is domain-agnostic.** It does not call Hub, Backstage,
    or any inventory system. Parameter values are opaque.
 2. **Agent Sandbox is a hard dependency.** No bare-Pod fallback.
-3. **Git credentials stay in the harness.** The agent does not receive
-   push credentials in its env vars or git config.
+3. **Push credentials stay in the harness.** The agent commits locally
+   but does not receive push credentials. Only the harness pushes.
 4. **Controller is a stateless reconciler.** No ACP connections, no
    in-memory streaming state. It watches CRs only.
 5. **The UI connects to agent pods directly for ACP streaming.** The

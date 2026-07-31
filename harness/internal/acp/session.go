@@ -33,7 +33,7 @@ type ClientInfo struct {
 
 // InitResult is the response from initialize.
 type InitResult struct {
-	ProtocolVersion  int             `json:"protocolVersion"`
+	ProtocolVersion   int             `json:"protocolVersion"`
 	AgentCapabilities json.RawMessage `json:"agentCapabilities"`
 }
 
@@ -123,7 +123,11 @@ func (c *SessionClient) CreateSession(ctx context.Context, cwd string, mcpServer
 		return "", fmt.Errorf("session/new: no session ID received")
 	}
 
-	logging.Ok("ACP session created: %s", sessionID[:8]+"...")
+	preview := sessionID
+	if len(preview) > 8 {
+		preview = preview[:8] + "..."
+	}
+	logging.Ok("ACP session created: %s", preview)
 	return sessionID, nil
 }
 
@@ -141,9 +145,9 @@ type PromptParams struct {
 
 // PromptResult is the final response from session/prompt.
 type PromptResult struct {
-	StopReason string          `json:"stopReason"`
-	Usage      *PromptUsage    `json:"usage,omitempty"`
-	Chunks     []string        // collected agent_message_chunk text
+	StopReason string       `json:"stopReason"`
+	Usage      *PromptUsage `json:"usage,omitempty"`
+	Chunks     []string     `json:"-"`
 }
 
 type PromptUsage struct {
@@ -153,8 +157,9 @@ type PromptUsage struct {
 }
 
 // SendPrompt sends a prompt to a session and collects the streaming
-// response. Returns the final result with all collected message chunks.
-func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, content []ContentBlock) (*PromptResult, error) {
+// response. maxTurns limits the number of tool calls before the prompt
+// is terminated. If maxTurns is 0, no limit is enforced.
+func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, content []ContentBlock, maxTurns int) (*PromptResult, error) {
 	req := newRequest("session/prompt", &PromptParams{
 		SessionID: sessionID,
 		Prompt:    content,
@@ -165,6 +170,7 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 	}
 
 	result := &PromptResult{}
+	turnCount := 0
 
 	for {
 		select {
@@ -174,7 +180,18 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 			return nil, fmt.Errorf("websocket connection closed during prompt")
 		case msg := <-c.ws.Recv():
 			if msg.IsNotification() {
+				if isToolCall(msg) {
+					turnCount++
+				}
 				handlePromptNotification(msg, result)
+				if maxTurns > 0 && turnCount >= maxTurns {
+					logging.Warn("max turns reached (%d), terminating", maxTurns)
+					return result, fmt.Errorf("max turns reached (%d)", maxTurns)
+				}
+				continue
+			}
+			if msg.IsAgentRequest() {
+				c.answerAgentRequest(msg)
 				continue
 			}
 			if msg.ID != nil && *msg.ID == req.ID {
@@ -187,6 +204,67 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 				return result, nil
 			}
 		}
+	}
+}
+
+// PermissionOption is one choice offered by a session/request_permission
+// request (kinds: allow_always, allow_once, reject_once, reject_always).
+type PermissionOption struct {
+	OptionID string `json:"optionId"`
+	Name     string `json:"name,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+}
+
+// answerAgentRequest replies to a request goose initiates toward the client
+// (session/request_permission, elicitation/create, fs/*). These frames were
+// previously dropped on the floor — and goose parks the turn on the reply
+// with NO timeout; session/cancel cannot unpark it. Any session that enters
+// approve mode (GOOSE_MODE=approve / session/set_mode), or a SecurityInspector
+// escalation via SECURITY_PROMPT_ENABLED even in auto mode, would hang the
+// stage until the pod deadline.
+//
+// The harness is headless, so the policy is fail-closed: deny permission
+// requests explicitly (goose declines the tool and the turn continues) and
+// reject everything else with method-not-found (goose maps that to a
+// cancelled/declined outcome as well).
+func (c *SessionClient) answerAgentRequest(msg *RPCResponse) {
+	id := *msg.ID
+
+	if msg.Method != "session/request_permission" {
+		logging.Warn("agent request %q unsupported — rejecting (method not found)", msg.Method)
+		if err := c.ws.SendResponse(id, nil, &RPCError{Code: -32601, Message: "method not supported by harness"}); err != nil {
+			logging.Warn("reply to %s: %v", msg.Method, err)
+		}
+		return
+	}
+
+	var params struct {
+		ToolCall struct {
+			Title string `json:"title"`
+		} `json:"toolCall"`
+		Options []PermissionOption `json:"options"`
+	}
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		logging.Warn("parse permission request: %v — cancelling it", err)
+		if err := c.ws.SendResponse(id, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}, nil); err != nil {
+			logging.Warn("reply to permission request: %v", err)
+		}
+		return
+	}
+
+	// Prefer an explicit one-shot rejection; an unknown or missing option
+	// falls back to the cancelled outcome, which goose also treats as a
+	// decline (fail-closed on its side too).
+	outcome := map[string]any{"outcome": "cancelled"}
+	for _, opt := range params.Options {
+		if opt.Kind == "reject_once" {
+			outcome = map[string]any{"outcome": "selected", "optionId": opt.OptionID}
+			break
+		}
+	}
+	logging.Warn("goose asked permission for %q — headless harness denies it", params.ToolCall.Title)
+	if err := c.ws.SendResponse(id, map[string]any{"outcome": outcome}, nil); err != nil {
+		logging.Warn("reply to permission request: %v", err)
 	}
 }
 
@@ -203,6 +281,21 @@ func extractSessionIDFromNotifications(notifications []*RPCResponse) string {
 		}
 	}
 	return ""
+}
+
+func isToolCall(msg *RPCResponse) bool {
+	if msg.Method != "session/update" {
+		return false
+	}
+	var params struct {
+		Update struct {
+			SessionUpdate string `json:"sessionUpdate"`
+		} `json:"update"`
+	}
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		return false
+	}
+	return params.Update.SessionUpdate == "tool_call"
 }
 
 func handlePromptNotification(msg *RPCResponse, result *PromptResult) {

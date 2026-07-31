@@ -18,7 +18,7 @@ func TestACPIntegrationDefaultPort(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	srv, err := goose.StartServe(ctx, 0, "", "", "", "")
+	srv, err := goose.StartServe(ctx, 0, "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("StartServe: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestACPIntegrationDefaultPort(t *testing.T) {
 
 	result, err := session.SendPrompt(ctx, sessionID, []acp.ContentBlock{
 		{Type: "text", Text: "Respond with exactly one word: hello"},
-	})
+	}, 0)
 	if err != nil {
 		t.Fatalf("SendPrompt: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestACPIntegrationFreePort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindFreePort: %v", err)
 	}
-	srv, err := goose.StartServe(ctx, port, "", "", "", "")
+	srv, err := goose.StartServe(ctx, port, "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("StartServe: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestACPIntegrationFreePort(t *testing.T) {
 
 	result, err := session.SendPrompt(ctx, sessionID, []acp.ContentBlock{
 		{Type: "text", Text: "Respond with exactly one word: hello"},
-	})
+	}, 0)
 	if err != nil {
 		t.Fatalf("SendPrompt: %v", err)
 	}

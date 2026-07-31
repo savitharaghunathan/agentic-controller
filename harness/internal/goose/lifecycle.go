@@ -2,8 +2,6 @@ package goose
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -21,7 +19,8 @@ type ServeProcess struct {
 	cmd       *exec.Cmd
 	port      int
 	secretKey string
-	done      chan error
+	done      chan struct{}
+	tempDirs  []string
 }
 
 const (
@@ -32,15 +31,17 @@ const (
 )
 
 // StartServe launches goose serve on the given port with authentication.
-// If port is 0, DefaultACPPort (4000) is used. For local testing with
-// multiple concurrent runs, pass a specific port or use FindFreePort().
-// Provider, apiKey, and endpoint are translated to provider-specific env
-// vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) so goose serve knows
-// how to authenticate with the LLM. In a Sandbox, these come from
-// KONVEYOR_MODEL_PRIMARY_* env vars injected by the controller.
-// If KONVEYOR_ACP_SECRET_KEY is set in the environment, it is used.
-// Otherwise a random key is generated for local testing.
-func StartServe(ctx context.Context, port int, provider, model, apiKey, endpoint string) (*ServeProcess, error) {
+// If port is 0, DefaultACPPort (4000) is used. secretKey is the ACP
+// authentication key (from config.Config.ACPSecretKey). Provider, apiKey,
+// and endpoint are translated to provider-specific env vars so goose
+// serve knows how to authenticate with the LLM.
+//
+// Bind address follows authentication: with a secret key the server binds
+// all interfaces — in a Sandbox the platform attaches to <pod>:4000 through
+// the run's headless Service, which goose's default loopback bind would
+// refuse. Without a key (bare CLI use) it stays loopback-only; an
+// unauthenticated ACP server must never be reachable off-host.
+func StartServe(ctx context.Context, port int, secretKey, provider, model, apiKey, endpoint string) (*ServeProcess, error) {
 	goosePath, err := exec.LookPath("goose")
 	if err != nil {
 		return nil, fmt.Errorf("goose not found: %w", err)
@@ -50,28 +51,28 @@ func StartServe(ctx context.Context, port int, provider, model, apiKey, endpoint
 		port = DefaultACPPort
 	}
 
-	secretKey := os.Getenv("KONVEYOR_ACP_SECRET_KEY")
-	if secretKey == "" {
-		// REMOVE LATER: local testing only — in production the controller
-		// provides KONVEYOR_ACP_SECRET_KEY via a K8s Secret.
-		secretKey, err = generateLocalSecretKey()
-		if err != nil {
-			return nil, fmt.Errorf("generate secret key: %w", err)
-		}
-		logging.Warn("no KONVEYOR_ACP_SECRET_KEY set, generated local key for testing")
+	host := "127.0.0.1"
+	if secretKey != "" {
+		host = "0.0.0.0"
 	}
 
 	cmd := exec.CommandContext(ctx, goosePath, "serve",
+		"--host", host,
 		"--port", fmt.Sprintf("%d", port),
 		"--with-builtin", "developer",
 	)
-	env := providerEnv(provider, model, apiKey, endpoint)
-	env = append(env, "GOOSE_SERVER__SECRET_KEY="+secretKey)
+	env, tempDirs := providerEnv(provider, model, apiKey, endpoint)
+	if secretKey != "" {
+		env = append(env, "GOOSE_SERVER__SECRET_KEY="+secretKey)
+	}
 	cmd.Env = env
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
+		for _, d := range tempDirs {
+			os.RemoveAll(d)
+		}
 		return nil, fmt.Errorf("start goose serve: %w", err)
 	}
 
@@ -79,11 +80,13 @@ func StartServe(ctx context.Context, port int, provider, model, apiKey, endpoint
 		cmd:       cmd,
 		port:      port,
 		secretKey: secretKey,
-		done:      make(chan error, 1),
+		done:      make(chan struct{}),
+		tempDirs:  tempDirs,
 	}
 
 	go func() {
-		srv.done <- cmd.Wait()
+		cmd.Wait()
+		close(srv.done)
 	}()
 
 	logging.Info("goose serve started on port %d (pid %d)", port, cmd.Process.Pid)
@@ -111,7 +114,10 @@ func (s *ServeProcess) Alive() bool {
 }
 
 // Stop sends SIGTERM and waits up to 5 seconds, then SIGKILL.
+// Cleans up any temporary credential files created during startup.
 func (s *ServeProcess) Stop() error {
+	defer s.cleanup()
+
 	if !s.Alive() {
 		return nil
 	}
@@ -134,6 +140,13 @@ func (s *ServeProcess) Stop() error {
 	}
 }
 
+func (s *ServeProcess) cleanup() {
+	for _, d := range s.tempDirs {
+		os.RemoveAll(d)
+	}
+	s.tempDirs = nil
+}
+
 // FindFreePort returns an available TCP port.
 func FindFreePort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -145,23 +158,13 @@ func FindFreePort() (int, error) {
 	return port, nil
 }
 
-// REMOVE LATER: local testing only — generates a random secret key
-// when KONVEYOR_ACP_SECRET_KEY is not set.
-func generateLocalSecretKey() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
-}
-
 // providerEnv returns the current process environment with LLM provider
 // credentials translated to the env vars goose expects. Called before
 // starting goose serve so the process has the right credentials at
 // startup. In a Sandbox, the controller injects KONVEYOR_MODEL_PRIMARY_*
 // env vars; this function maps them to provider-specific names.
-func providerEnv(provider, model, apiKey, endpoint string) []string {
-	env := os.Environ()
+func providerEnv(provider, model, apiKey, endpoint string) (env []string, tempDirs []string) {
+	env = os.Environ()
 	p := strings.ReplaceAll(strings.ToLower(provider), "-", "_")
 
 	if p != "" {
@@ -179,6 +182,10 @@ func providerEnv(provider, model, apiKey, endpoint string) []string {
 			env = append(env, "OPENAI_API_KEY="+apiKey)
 		case "google":
 			env = append(env, "GOOGLE_API_KEY="+apiKey)
+		case "gcp_vertex_ai":
+			// uses ADC credentials, not an API key
+		default:
+			logging.Warn("unmapped provider %q — API key not forwarded to goose", p)
 		}
 	}
 
@@ -190,7 +197,9 @@ func providerEnv(provider, model, apiKey, endpoint string) []string {
 				logging.Warn("write ADC file: %v", err)
 			} else {
 				env = append(env, "GOOGLE_APPLICATION_CREDENTIALS="+path)
+				tempDirs = append(tempDirs, filepath.Dir(path))
 			}
+			env = filterEnvKey(env, "GOOGLE_APPLICATION_CREDENTIALS_JSON")
 		}
 	}
 
@@ -200,17 +209,34 @@ func providerEnv(provider, model, apiKey, endpoint string) []string {
 			env = append(env, "ANTHROPIC_HOST="+endpoint)
 		case "openai":
 			env = append(env, "OPENAI_HOST="+endpoint)
+		case "gcp_vertex_ai":
+			// endpoint configured via ADC project/region, not env var
+		default:
+			logging.Warn("unmapped provider %q — endpoint not forwarded to goose", p)
 		}
 	}
 
-	return env
+	return env, tempDirs
 }
 
-// writeADCFile writes service account JSON to a file for Google ADC.
-// Goose reads credentials from a file path, not inline.
+func filterEnvKey(env []string, key string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// writeADCFile writes service account JSON to a temp file for Google ADC.
+// Uses a temp directory outside the repo to prevent accidental commit/push.
 func writeADCFile(content string) (string, error) {
-	dir := filepath.Join(os.Getenv("HOME"), ".migration-harness")
-	os.MkdirAll(dir, 0700)
+	dir, err := os.MkdirTemp("", "migration-harness-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir for ADC: %w", err)
+	}
 	path := filepath.Join(dir, "gcp-adc.json")
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		return "", fmt.Errorf("write ADC file: %w", err)

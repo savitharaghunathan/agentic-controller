@@ -1,78 +1,40 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/spf13/cobra"
 
 	"github.com/konveyor/migration-harness/internal/acp"
 	"github.com/konveyor/migration-harness/internal/config"
-	"github.com/konveyor/migration-harness/internal/detect"
-	"github.com/konveyor/migration-harness/internal/execute"
-	"github.com/konveyor/migration-harness/internal/fixloop"
 	"github.com/konveyor/migration-harness/internal/git"
 	"github.com/konveyor/migration-harness/internal/goose"
-	"github.com/konveyor/migration-harness/internal/handoff"
+	"github.com/konveyor/migration-harness/internal/hub"
 	"github.com/konveyor/migration-harness/internal/logging"
-	"github.com/konveyor/migration-harness/internal/metrics"
-	"github.com/konveyor/migration-harness/internal/plan"
-	"github.com/konveyor/migration-harness/internal/rundir"
-	"github.com/konveyor/migration-harness/internal/verify"
+	"github.com/konveyor/migration-harness/internal/watcher"
 )
 
 var rootCmd = &cobra.Command{
 	Use:   "migration-harness",
-	Short: "AI-powered code migration CLI",
-	Long:  "migration-harness orchestrates LLM agents through a 5-step pipeline (detect, plan, execute, verify, fix-loop) to automate enterprise code migrations.",
-}
-
-var initCmd = &cobra.Command{
-	Use:   "init",
-	Short: "Configure migration-harness",
-	RunE:  runInit,
+	Short: "Thin git plumbing wrapper for goose-based migration stages",
 }
 
 var runCmd = &cobra.Command{
-	Use:   "run [repo-or-url] [request]",
-	Short: "Run a full migration pipeline",
-	Args:  cobra.MaximumNArgs(2),
-	RunE:  runMigration,
-}
-
-var statusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show status of the latest migration run",
-	RunE:  runStatus,
-}
-
-var resumeCmd = &cobra.Command{
-	Use:   "resume",
-	Short: "Resume an incomplete migration",
-	RunE:  runResume,
-}
-
-var stepCmd = &cobra.Command{
-	Use:   "step <name> <repo>",
-	Short: "Run a single pipeline step",
-	Args:  cobra.MinimumNArgs(2),
-	RunE:  runStep,
+	Use:   "run",
+	Short: "Run a single migration stage (plan, execute, or verify)",
+	RunE:  runStage,
 }
 
 func init() {
-	runCmd.Flags().BoolVar(&plan.AutoApprove, "auto-approve", false, "Skip interactive plan approval")
-	rootCmd.AddCommand(initCmd, runCmd, statusCmd, resumeCmd, stepCmd)
+	rootCmd.AddCommand(runCmd)
 }
 
 func main() {
@@ -81,409 +43,299 @@ func main() {
 	}
 }
 
-func checkDeps() error {
-	for _, dep := range []string{"goose", "graphify"} {
-		if _, err := exec.LookPath(dep); err != nil {
-			return fmt.Errorf("required command not found: %s", dep)
-		}
-	}
-	return nil
-}
-
-func runInit(cmd *cobra.Command, args []string) error {
-	logging.Header("Migration Harness Setup")
-
-	if err := checkDeps(); err != nil {
-		return err
-	}
-
-	reader := bufio.NewReader(os.Stdin)
-
-	provider := promptWithDefault(reader, "LLM provider (e.g. anthropic, gcp_vertex_ai, openai)", "anthropic")
-	model := promptWithDefault(reader, "Model name", "claude-sonnet-4-5")
-	maxTurnsStr := promptWithDefault(reader, "Max turns per step", strconv.Itoa(config.DefaultMaxTurns))
-	maxFixStr := promptWithDefault(reader, "Max fix iterations", strconv.Itoa(config.DefaultMaxFixIterations))
-
-	maxTurns, err := strconv.Atoi(maxTurnsStr)
-	if err != nil {
-		maxTurns = config.DefaultMaxTurns
-	}
-	maxFix, err := strconv.Atoi(maxFixStr)
-	if err != nil {
-		maxFix = config.DefaultMaxFixIterations
-	}
-
-	cfg := &config.Config{
-		Model:            model,
-		Provider:         provider,
-		MaxTurns:         maxTurns,
-		MaxFixIterations: maxFix,
-	}
-
-	path := config.DefaultConfigPath()
-	if err := config.Save(path, cfg); err != nil {
-		return fmt.Errorf("save config: %w", err)
-	}
-
-	logging.Ok("Config saved to %s", path)
-	return nil
-}
-
-func promptWithDefault(reader *bufio.Reader, prompt, defaultVal string) string {
-	fmt.Fprintf(os.Stderr, "%s [%s]: ", prompt, defaultVal)
-	line, _ := reader.ReadString('\n')
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return defaultVal
-	}
-	return line
-}
-
-func runMigration(cmd *cobra.Command, args []string) error {
-	var repoArg, request string
-	switch len(args) {
-	case 2:
-		repoArg = args[0]
-		request = args[1]
-	case 1:
-		repoArg = args[0]
-	}
-	if request == "" {
-		request = os.Getenv("KONVEYOR_INSTRUCTIONS")
-	}
-	if request == "" {
-		return fmt.Errorf("request is required: pass as argument or set KONVEYOR_INSTRUCTIONS")
-	}
-	if repoArg == "" {
-		repoArg = os.Getenv("GIT_REPO_URL")
-	}
-	if repoArg == "" {
-		return fmt.Errorf("repo is required: pass as argument or set GIT_REPO_URL")
-	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+func runStage(cmd *cobra.Command, args []string) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	cfgPath := config.DefaultConfigPath()
-	cfg, err := config.Load(cfgPath)
+	// 1. Load config from env
+	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		return fmt.Errorf("load config (run 'migration-harness init' first): %w", err)
+		return fmt.Errorf("config: %w", err)
 	}
 
-	tracker := metrics.NewTracker()
+	// 2. Resolve app info + git creds from Hub
+	cloneDir := os.Getenv("HARNESS_WORK_DIR")
+	if cloneDir == "" {
+		cloneDir = "/workspace/repo"
+	}
 
-	creds, err := git.ReadFromEnv()
+	creds, hubClient, err := resolveFromHub(cfg)
 	if err != nil {
-		return fmt.Errorf("git credentials: %w", err)
+		return fmt.Errorf("hub resolution: %w", err)
 	}
 
-	var workDir string
-	var repo *gogit.Repository
-
-	if creds != nil {
-		tracker.StartStep("git-clone")
-		logging.Header("Git Setup")
-		logging.Info("cloning %s...", creds.RepoURL)
-
-		tmpBase := os.Getenv("HARNESS_WORK_DIR")
-		if tmpBase == "" {
-			tmpBase = os.TempDir()
-		}
-		workDir, err = os.MkdirTemp(tmpBase, "migration-harness-"+filepath.Base(creds.RepoURL)+"-*")
-		if err != nil {
-			return fmt.Errorf("create temp dir: %w", err)
-		}
-		repo, err = git.Clone(ctx, creds, workDir)
-		if err != nil {
-			return fmt.Errorf("clone: %w", err)
-		}
-
-		if err := git.StripCredentials(repo); err != nil {
-			return fmt.Errorf("strip credentials: %w", err)
-		}
-
-		git.ClearEnvCredentials()
-
-		if err := git.CheckoutBranch(repo, creds.Branch); err != nil {
-			return fmt.Errorf("checkout branch: %w", err)
-		}
-
-		logging.Ok("cloned to %s, branch %s", workDir, creds.Branch)
-		tracker.EndStep()
-	} else {
-		workDir = repoArg
-		if _, err := os.Stat(workDir); err != nil {
-			return fmt.Errorf("repo path does not exist: %s", workDir)
-		}
+	if cfg.TargetBranch == creds.Branch {
+		return fmt.Errorf("TARGET_BRANCH %q must differ from source branch", cfg.TargetBranch)
 	}
+	creds.Branch = cfg.TargetBranch
 
-	runsDir := rundir.DefaultRunsDir()
-	runDir, err := rundir.New(runsDir, filepath.Base(workDir))
+	// 3. Clone, strip creds, checkout branch
+	logging.Header("Git Setup")
+	logging.Info("cloning %s...", creds.RepoURL)
+
+	repo, err := git.Clone(ctx, creds, cloneDir)
 	if err != nil {
-		return fmt.Errorf("create run dir: %w", err)
+		return fmt.Errorf("clone: %w", err)
 	}
-	logging.Info("run directory: %s", runDir)
 
-	installDir := findInstallDir()
-	skillDir := filepath.Join(installDir, "skill-bundle", "goose-migration")
-	recipesDir := filepath.Join(installDir, "recipes")
-	logDir := filepath.Join(runDir, "logs")
+	if err := git.ConfigureAuthor(repo); err != nil {
+		return fmt.Errorf("configure git author: %w", err)
+	}
 
-	srv, err := goose.StartServe(ctx, 0, cfg.Provider, cfg.Model, cfg.APIKey, cfg.Endpoint)
+	if err := git.StripCredentials(repo); err != nil {
+		return fmt.Errorf("strip credentials: %w", err)
+	}
+	hub.ClearEnv()
+
+	if err := git.CheckoutBranch(repo, creds.Branch); err != nil {
+		return fmt.Errorf("checkout branch %s: %w", creds.Branch, err)
+	}
+	logging.Ok("cloned to %s, branch %s", cloneDir, creds.Branch)
+
+	if err := git.EnsureGitignore(cloneDir, []string{
+		"graphify-out/",
+		".goose/",
+		"__pycache__/",
+		"node_modules/",
+		"target/",
+		"*.tmp",
+		"*.swp",
+		"*.bak",
+	}); err != nil {
+		logging.Warn("gitignore: %v", err)
+	}
+
+	// 3b. Write analysis to workspace (if resolved from Hub)
+	if hubClient != nil {
+		if err := fetchAndWriteAnalysis(hubClient, cfg.AppID, cloneDir); err != nil {
+			logging.Warn("analysis fetch: %v", err)
+		}
+	}
+
+	// 3c. Commit harness-managed files so they survive on the branch
+	if err := git.CommitFiles(repo, []string{
+		".gitignore",
+		".konveyor/analysis.json",
+	}, "harness: add grounding data"); err != nil {
+		return fmt.Errorf("commit harness files: %w", err)
+	}
+
+	// 4. Start goose serve
+	logging.Header("Goose Setup")
+	srv, err := goose.StartServe(ctx, 0, cfg.ACPSecretKey, cfg.Provider, cfg.Model, cfg.APIKey, cfg.Endpoint)
 	if err != nil {
 		return fmt.Errorf("start goose serve: %w", err)
 	}
 	defer srv.Stop()
 
+	// 5. Connect ACP, create session
 	wsClient, err := acp.WaitReadyDial(ctx, "127.0.0.1", srv.Port(), srv.SecretKey(), 30*time.Second)
 	if err != nil {
-		return fmt.Errorf("connect to goose serve: %w", err)
+		return fmt.Errorf("connect to goose: %w", err)
 	}
 	defer wsClient.Close()
 
-	acpSession := acp.NewSessionClient(wsClient)
-	runner := goose.NewACPRunner(acpSession, srv, cfg.Provider, cfg.Model, logDir, workDir)
+	session := acp.NewSessionClient(wsClient)
+	sessionID, err := session.CreateSession(ctx, cloneDir, nil)
+	if err != nil {
+		return fmt.Errorf("create session: %w", err)
+	}
 
-	var pushFn func() error
-	if creds != nil && repo != nil {
-		pushFn = func() error {
-			return git.Push(ctx, creds, repo, creds.Branch)
+	// 6. Discover skills
+	skillContent, _, err := discoverSkills()
+	if err != nil {
+		return fmt.Errorf("discover skills: %w", err)
+	}
+
+	// 7. Build prompt from context layers
+	prompt := buildPrompt(skillContent)
+
+	// 8. Start filesystem watcher BEFORE blocking prompt
+	pushFn := func() error {
+		return git.Push(ctx, creds, repo, creds.Branch)
+	}
+	w, err := watcher.New(cloneDir, pushFn)
+	if err != nil {
+		return fmt.Errorf("create watcher: %w", err)
+	}
+	if err := w.Start(ctx); err != nil {
+		return fmt.Errorf("start watcher: %w", err)
+	}
+	defer w.Stop()
+
+	// 9. Send single ACP prompt (blocks until goose finishes or MaxTurns is hit)
+	logging.Header("Running Stage")
+	logging.Info("max turns: %d", cfg.MaxTurns)
+	_, err = session.SendPrompt(ctx, sessionID, []acp.ContentBlock{
+		{Type: "text", Text: prompt},
+	}, cfg.MaxTurns)
+
+	if err != nil {
+		logging.Err("prompt failed: %v", err)
+	}
+
+	// 10. Check goose health
+	if !srv.Alive() {
+		logging.Err("goose serve crashed")
+	}
+
+	// 11. Check for uncommitted work
+	if wt, err := repo.Worktree(); err == nil {
+		if st, err := wt.Status(); err == nil && !st.IsClean() {
+			logging.Warn("worktree dirty at stage end — agent left %d uncommitted paths", len(st))
 		}
 	}
 
-	session := handoff.NewSession(
-		generateSessionID(),
-		request,
-		repoArg,
-		branchName(creds),
-		cfg.Model,
-		cfg.Provider,
-	)
+	// 12. Stop watcher before final push
+	w.Stop()
 
-	pipelineStatus := "completed"
+	// 13. Determine exit status from ACP/goose signals
+	stageFailed := err != nil || !srv.Alive()
 
-	syncSession := func(stepMsg string) {
-		session.Status = "in_progress"
-		if err := handoff.WriteSession(workDir, session); err != nil {
-			logging.Warn("write session.json: %v", err)
-		}
-		commitAndPush(repo, pushFn, stepMsg)
+	// 14. Final push (use a fresh context — the signal context may
+	// already be cancelled after SIGINT)
+	logging.Header("Final Push")
+	pushCtx, pushCancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer pushCancel()
+	if err := git.Push(pushCtx, creds, repo, creds.Branch); err != nil {
+		return fmt.Errorf("final push: %w", err)
 	}
 
-	defer func() {
-		session.Status = pipelineStatus
-
-		if err := handoff.WriteSession(workDir, session); err != nil {
-			logging.Warn("write session.json: %v", err)
-		}
-
-		m := tracker.Generate(pipelineStatus, cfg.Model, cfg.Provider)
-		if err := metrics.WriteMetrics(runDir, m); err != nil {
-			logging.Warn("write metrics: %v", err)
-		}
-
-		if creds != nil && repo != nil {
-			if _, err := git.CommitAll(repo, "konveyor: session handoff"); err != nil {
-				logging.Warn("commit handoff: %v", err)
-			}
-			if err := git.Push(ctx, creds, repo, creds.Branch); err != nil {
-				logging.Warn("push: %v", err)
-			}
-		}
-	}()
-
-	// Step 1: Detect
-	tracker.StartStep("detect")
-	detectResult, err := detect.Run(ctx, workDir, runDir)
-	if err != nil {
-		pipelineStatus = "failed"
-		return fmt.Errorf("detect: %w", err)
+	// 15. Exit
+	if stageFailed {
+		logging.Err("stage failed")
+		return fmt.Errorf("stage failed")
 	}
-	session.Pipeline.Detect = &handoff.DetectStatus{
-		StepStatus: handoff.StepStatus{
-			Status:          "completed",
-			DurationSeconds: tracker.StepDuration("detect"),
-		},
-		Nodes:       detectResult.Graph.Nodes,
-		Edges:       detectResult.Graph.Edges,
-		Communities: detectResult.Graph.Communities,
-	}
-	tracker.EndStep()
-	syncSession("konveyor: detect complete")
-
-	// Step 2: Plan
-	tracker.StartStep("plan")
-	p, err := plan.Run(ctx, workDir, runDir, request, skillDir, runner)
-	if err != nil {
-		pipelineStatus = "failed"
-		return fmt.Errorf("plan: %w", err)
-	}
-	session.Pipeline.Plan = &handoff.PlanStatus{
-		StepStatus:   handoff.StepStatus{Status: "completed", DurationSeconds: tracker.StepDuration("plan")},
-		ItemsPlanned: len(p.Items),
-	}
-	tracker.EndStep()
-	syncSession("konveyor: plan complete")
-
-	// Step 3: Execute
-	tracker.StartStep("execute")
-	items, summary, execCommits, err := execute.Run(ctx, workDir, runDir, recipesDir, p, runner, repo, pushFn)
-	if err != nil {
-		pipelineStatus = "failed"
-		return fmt.Errorf("execute: %w", err)
-	}
-	for _, c := range execCommits {
-		session.Commits = append(session.Commits, handoff.CommitRecord{
-			SHA: c.SHA, Message: c.Message, Step: c.Step,
-		})
-	}
-	session.Pipeline.Execute = &handoff.ExecuteStatus{
-		StepStatus:     handoff.StepStatus{Status: "completed", DurationSeconds: tracker.StepDuration("execute")},
-		ItemsSucceeded: summary.Ok,
-		ItemsFailed:    summary.Failed,
-		ItemsSkipped:   summary.Skipped,
-	}
-	tracker.EndStep()
-	syncSession("konveyor: execute complete")
-
-	// Step 4: Verify
-	tracker.StartStep("verify")
-	vr, err := verify.Run(ctx, workDir, runDir, recipesDir, p.MigrationType, runner)
-	if err != nil {
-		logging.Warn("verify: %v", err)
-	}
-	verifyOk := vr != nil && vr.BuildOk
-	session.Pipeline.Verify = &handoff.VerifyStatus{
-		StepStatus:  handoff.StepStatus{Status: "completed", DurationSeconds: tracker.StepDuration("verify")},
-		BuildOk:     verifyOk,
-		TestsPassed: safeTestsPassed(vr),
-	}
-	tracker.EndStep()
-	syncSession("konveyor: verify complete")
-
-	// Step 5: Fix Loop
-	tracker.StartStep("fix-loop")
-	flReport, flCommits, err := fixloop.Run(ctx, workDir, runDir, recipesDir, p.MigrationType, cfg.MaxFixIterations, runner, repo, pushFn)
-	if err != nil {
-		logging.Warn("fix-loop: %v", err)
-	}
-	for _, c := range flCommits {
-		session.Commits = append(session.Commits, handoff.CommitRecord{
-			SHA: c.SHA, Message: c.Message, Step: c.Iter,
-		})
-	}
-	session.Pipeline.FixLoop = &handoff.FixLoopStatus{
-		StepStatus: handoff.StepStatus{Status: fixLoopStatus(flReport)},
-		Iterations: fixLoopIterations(flReport),
-	}
-	tracker.EndStep()
-
-	// Write handoff
-	if err := handoff.WriteHandoff(workDir, session, p, items, vr); err != nil {
-		logging.Warn("write handoff: %v", err)
-	}
-
-	if !verifyOk && (flReport == nil || flReport.Status != "success") {
-		pipelineStatus = "partial"
-	}
-
-	logging.Header("Migration Complete")
-	logging.Ok("status: %s", pipelineStatus)
-	logging.Info("run dir: %s", runDir)
-
+	logging.Ok("stage succeeded")
 	return nil
 }
 
-func runStatus(cmd *cobra.Command, args []string) error {
-	runsDir := rundir.DefaultRunsDir()
-	latest, err := rundir.Latest(runsDir)
+const defaultSkillsDir = "/opt/skills"
+
+func skillsDir() string {
+	if v := os.Getenv("HARNESS_SKILLS_DIR"); v != "" {
+		return v
+	}
+	return defaultSkillsDir
+}
+
+func discoverSkills() (string, []string, error) {
+	pattern := filepath.Join(skillsDir(), "*/SKILL.md")
+	matches, err := filepath.Glob(pattern)
 	if err != nil {
-		return fmt.Errorf("no runs found: %w", err)
+		return "", nil, err
 	}
-	logging.Info("latest run: %s", latest)
+	if len(matches) == 0 {
+		return "", nil, fmt.Errorf("no skills found at %s", pattern)
+	}
 
-	metricsPath := filepath.Join(latest, "metrics.json")
-	if data, err := os.ReadFile(metricsPath); err == nil {
-		fmt.Fprintln(os.Stderr, string(data))
-	} else {
-		logging.Warn("no metrics.json found")
-	}
-	return nil
-}
-
-func runResume(cmd *cobra.Command, args []string) error {
-	return fmt.Errorf("resume is not yet implemented")
-}
-
-func runStep(cmd *cobra.Command, args []string) error {
-	return fmt.Errorf("step execution is not yet implemented")
-}
-
-func findInstallDir() string {
-	// Environment override takes priority (set by Dockerfile or operator)
-	if dir := os.Getenv("KONVEYOR_INSTALL_DIR"); dir != "" {
-		return dir
-	}
-	// Default: go up one level from the binary location.
-	// Binary at /opt/migration-harness/bin/migration-harness
-	//        → installDir = /opt/migration-harness/
-	// This matches the bash version's behavior.
-	exe, err := os.Executable()
-	if err != nil {
-		return "."
-	}
-	return filepath.Dir(filepath.Dir(exe))
-}
-
-func branchName(creds *git.Credentials) string {
-	if creds != nil {
-		return creds.Branch
-	}
-	return ""
-}
-
-func safeTestsPassed(vr *verify.VerifyResult) int {
-	if vr != nil {
-		return vr.TestsPassed
-	}
-	return 0
-}
-
-func fixLoopStatus(r *fixloop.FixLoopReport) string {
-	if r != nil {
-		return r.Status
-	}
-	return "skipped"
-}
-
-func fixLoopIterations(r *fixloop.FixLoopReport) int {
-	if r != nil {
-		return r.Iterations
-	}
-	return 0
-}
-
-func commitAndPush(repo *gogit.Repository, pushFn func() error, msg string) {
-	if repo == nil {
-		return
-	}
-	hash, err := git.CommitAll(repo, msg)
-	if err != nil {
-		logging.Warn("commit (%s): %v", msg, err)
-		return
-	}
-	if hash == (plumbing.Hash{}) {
-		return
-	}
-	if pushFn != nil {
-		if err := pushFn(); err != nil {
-			logging.Warn("push (%s): %v", msg, err)
+	var combined strings.Builder
+	for i, m := range matches {
+		content, err := os.ReadFile(m)
+		if err != nil {
+			return "", nil, fmt.Errorf("read skill %s: %w", m, err)
 		}
+		logging.Info("discovered skill: %s", m)
+		if i > 0 {
+			combined.WriteString("\n\n---\n\n")
+		}
+		combined.Write(content)
 	}
+	return combined.String(), matches, nil
 }
 
-func generateSessionID() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+func buildPrompt(skillContent string) string {
+	var b strings.Builder
+
+	if v := os.Getenv("KONVEYOR_PROMPT"); v != "" {
+		b.WriteString(v)
+		b.WriteString("\n\n")
+	}
+
+	if v := os.Getenv("KONVEYOR_PLAYBOOK_INSTRUCTIONS"); v != "" {
+		b.WriteString("## Migration Context\n\n")
+		b.WriteString(v)
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString("## Skill Instructions\n\n")
+	b.WriteString(skillContent)
+	b.WriteString("\n\n")
+
+	if v := os.Getenv("KONVEYOR_INSTRUCTIONS"); v != "" {
+		b.WriteString("## Stage Task\n\n")
+		b.WriteString(v)
+	}
+
+	return b.String()
+}
+
+func resolveFromHub(cfg *config.Config) (*git.Credentials, *hub.Client, error) {
+	logging.Header("Hub Resolution")
+
+	appID, err := hub.ParseAppID(cfg.AppID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid APP_ID %q: %w", cfg.AppID, err)
+	}
+
+	hubClient := hub.NewClient(cfg.HubBaseURL, cfg.HubToken)
+
+	app, err := hubClient.FetchApp(appID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fetch app: %w", err)
+	}
+	logging.Ok("app: %s (id=%d), repo: %s", app.Name, app.ID, app.Repository.URL)
+
+	identity, err := hubClient.FetchGitCreds(appID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fetch git creds: %w", err)
+	}
+
+	creds := &git.Credentials{
+		RepoURL: app.Repository.URL,
+		Branch:  app.Repository.Branch,
+	}
+	if identity != nil {
+		creds.Username = identity.User
+		creds.Token = identity.Password
+		if creds.Username == "" {
+			creds.Username = "x-access-token"
+		}
+		logging.Ok("git identity: %s", identity.Name)
+	}
+
+	return creds, hubClient, nil
+}
+
+func fetchAndWriteAnalysis(hubClient *hub.Client, appIDStr string, workDir string) error {
+	appID, err := hub.ParseAppID(appIDStr)
+	if err != nil {
+		return fmt.Errorf("invalid APP_ID %q: %w", appIDStr, err)
+	}
+	insights, err := hubClient.FetchAnalysis(appID)
+	if err != nil {
+		return err
+	}
+	if len(insights) == 0 {
+		logging.Info("no analysis results for app %s", appIDStr)
+		return nil
+	}
+
+	analysisDir := filepath.Join(workDir, ".konveyor")
+	if err := os.MkdirAll(analysisDir, 0o755); err != nil {
+		return fmt.Errorf("create .konveyor dir: %w", err)
+	}
+
+	data, err := json.MarshalIndent(insights, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal analysis: %w", err)
+	}
+
+	analysisPath := filepath.Join(analysisDir, "analysis.json")
+	if err := os.WriteFile(analysisPath, data, 0o644); err != nil {
+		return fmt.Errorf("write analysis: %w", err)
+	}
+
+	logging.Ok("wrote %d analysis insights to %s", len(insights), analysisPath)
+	return nil
 }

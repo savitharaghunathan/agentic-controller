@@ -90,6 +90,20 @@ func (c *WSClient) Send(req *Request) error {
 	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
+// SendResponse sends a JSON-RPC response for an agent-initiated request.
+// Exactly one of result and rpcErr should be set.
+func (c *WSClient) SendResponse(id int64, result any, rpcErr *RPCError) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	data, err := json.Marshal(&Response{JSONRPC: "2.0", ID: id, Result: result, Error: rpcErr})
+	if err != nil {
+		return fmt.Errorf("marshal response: %w", err)
+	}
+
+	return c.conn.WriteMessage(websocket.TextMessage, data)
+}
+
 // Call sends a JSON-RPC request and waits for the matching response.
 // Returns the response and any notifications received while waiting.
 func (c *WSClient) Call(ctx context.Context, method string, params any) (json.RawMessage, []*RPCResponse, error) {
