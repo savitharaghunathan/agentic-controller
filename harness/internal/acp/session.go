@@ -9,18 +9,20 @@ import (
 	"github.com/konveyor/migration-harness/internal/logging"
 )
 
-// SessionClient wraps WSClient with ACP session operations.
+// SessionClient wraps an ACP transport (WSClient for goose, StdioClient
+// for claude-agent-acp and other stdio agents) with ACP session
+// operations.
 type SessionClient struct {
-	ws          *WSClient
+	ws          rpcConn
 	initialized bool
 
 	fwdMu     sync.Mutex
 	forwarder PermissionForwarder
 }
 
-// NewSessionClient creates a session client from an existing WebSocket
+// NewSessionClient creates a session client from an existing ACP
 // connection and takes over answering agent-initiated requests on it.
-func NewSessionClient(ws *WSClient) *SessionClient {
+func NewSessionClient(ws rpcConn) *SessionClient {
 	c := &SessionClient{ws: ws}
 	ws.SetAgentRequestHandler(c.answerAgentRequest)
 	return c
