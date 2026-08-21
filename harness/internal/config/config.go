@@ -22,6 +22,11 @@ type Config struct {
 	APIKey   string
 	MaxTurns int
 
+	// AgentRuntime selects the ACP agent runtime: "" or "goose" (default)
+	// runs goose over WebSocket; "claude" runs Claude Code via
+	// claude-agent-acp over stdio. Any other value falls back to goose.
+	AgentRuntime string
+
 	HubBaseURL   string
 	HubToken     string
 	HubTokenID   string
@@ -86,6 +91,7 @@ func LoadFromEnv() (*Config, error) {
 		Provider:     envWithFallback("KONVEYOR_LLM_PROVIDER", "KONVEYOR_MODEL_PRIMARY_PROVIDER"),
 		Endpoint:     envWithFallback("KONVEYOR_LLM_ENDPOINT", "KONVEYOR_MODEL_PRIMARY_ENDPOINT"),
 		APIKey:       envWithFallback("KONVEYOR_LLM_API_KEY", "KONVEYOR_MODEL_PRIMARY_API_KEY"),
+		AgentRuntime: os.Getenv("HARNESS_AGENT_RUNTIME"),
 		MaxTurns:     DefaultMaxTurns,
 		HubBaseURL:   required["HUB_BASE_URL"],
 		HubToken:     os.Getenv("HUB_TOKEN"),
