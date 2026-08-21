@@ -194,6 +194,23 @@ func (c *SessionClient) CreateSession(ctx context.Context, cwd string, mcpServer
 	return sessionID, nil
 }
 
+// SetConfigOption sets a session-scoped config option (e.g. "mode",
+// "model") via session/set_config_option. Used by the claude runtime to
+// switch off tool-use confirmation prompts for unattended runs —
+// answerAgentRequest's fail-closed deny remains the safety net if a
+// permission request slips through anyway.
+func (c *SessionClient) SetConfigOption(ctx context.Context, sessionID, configID, value string) error {
+	_, _, err := c.ws.Call(ctx, "session/set_config_option", map[string]any{
+		"sessionId": sessionID,
+		"configId":  configID,
+		"value":     value,
+	})
+	if err != nil {
+		return fmt.Errorf("session/set_config_option(%s=%s): %w", configID, value, err)
+	}
+	return nil
+}
+
 // ContentBlock is a content item in a prompt.
 type ContentBlock struct {
 	Type string `json:"type"`
