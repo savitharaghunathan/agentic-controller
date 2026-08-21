@@ -280,7 +280,7 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 				}
 				return result, nil
 			default:
-				return nil, fmt.Errorf("websocket connection closed during prompt")
+				return nil, fmt.Errorf("ACP connection closed during prompt")
 			}
 		case msg := <-notifCh:
 			if isToolCall(msg) {
@@ -294,7 +294,7 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 		case msg := <-respCh:
 			// Notifications buffered before the response still belong to
 			// this turn — drain them so a trailing chunk is not lost when
-			// select picks respCh first (mirrors WSClient.Call).
+			// select picks respCh first (mirrors Call's behavior on both transports).
 			for _, n := range drainNotifications(notifCh) {
 				handlePromptNotification(n, result)
 			}
