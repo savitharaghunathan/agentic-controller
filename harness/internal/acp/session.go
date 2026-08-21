@@ -69,7 +69,7 @@ func (c *SessionClient) permissionForwarder() PermissionForwarder {
 
 // InitParams are required for the ACP initialize handshake.
 type InitParams struct {
-	ProtocolVersion string     `json:"protocolVersion"`
+	ProtocolVersion int        `json:"protocolVersion"`
 	ClientInfo      ClientInfo `json:"clientInfo"`
 	// ClientCapabilities is the ACP field name (the earlier "capabilities"
 	// spelling was never read by goose). The goose extension point lives
@@ -94,14 +94,17 @@ type InitResult struct {
 
 // Initialize performs the required ACP handshake. Must be called before
 // any session operations. protocolVersion is required — goose returns a
-// parse error without it.
+// parse error without it — and must be the numeric ACP protocol version
+// (currently 1): claude-agent-acp validates initialize params against the
+// ACP JSON schema, which types protocolVersion as an integer, and rejects
+// a string value with -32602 Invalid params.
 func (c *SessionClient) Initialize(ctx context.Context) (*InitResult, error) {
 	if c.initialized {
 		return nil, nil
 	}
 
 	result, _, err := c.ws.Call(ctx, "initialize", &InitParams{
-		ProtocolVersion: "0.1",
+		ProtocolVersion: 1,
 		ClientInfo: ClientInfo{
 			Name:    "migration-harness",
 			Version: "0.1.0",
