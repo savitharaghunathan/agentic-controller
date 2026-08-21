@@ -23,4 +23,7 @@ type rpcConn interface {
 	removeNotifSink(id int)
 }
 
-var _ rpcConn = (*WSClient)(nil)
+var (
+	_ rpcConn = (*WSClient)(nil)
+	_ rpcConn = (*StdioClient)(nil)
+)
