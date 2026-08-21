@@ -1,5 +1,22 @@
 # Claude Code as an alternate harness agent runtime
 
+## Status
+
+Go-side plan (Tasks 1-6) shipped as designed, with one correction found
+during manual testing: `initialize`'s `protocolVersion` must be numeric
+(`1`), not the string `"0.1"` this doc originally showed — claude-agent-acp
+validates `initialize` params against the ACP JSON schema, which types
+`protocolVersion` as an integer, and rejects a string with -32602 Invalid
+params. goose is lenient and accepted either, which is why this wasn't
+caught by the goose-only test suite.
+
+The "published `agent-claude` container image" non-goal below is no
+longer accurate: `claude-agent-acp` is now installed directly into
+`agent-base` (`images/agent-base/Containerfile`), so every language image
+built from it supports both runtimes — no separate image was needed. A
+Kind integration test mirroring `hack/harness-test/` lives at
+`hack/harness-claude-test/` (`make harness-claude-test`).
+
 ## Background
 
 The migration harness (`harness/`) currently drives exactly one agent

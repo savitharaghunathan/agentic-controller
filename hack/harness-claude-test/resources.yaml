@@ -1,0 +1,25 @@
+# Shared resources for the claude runtime harness integration test in Kind.
+# Creates: Gateway (used by workflow-resources.yaml)
+#
+# Same Gateway definition as hack/harness-test/resources.yaml — the
+# claude runtime reuses the same provider/model config the goose runtime
+# uses, selecting claude-agent-acp only via HARNESS_AGENT_RUNTIME on the
+# AgentWorkflowRun (see workflow-resources.yaml).
+#
+# Usage:
+#   hack/harness-claude-test/setup.sh
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: Gateway
+metadata:
+  name: gcp-vertex-ai
+spec:
+  provider: gcp-vertex-ai
+  endpoint: "global-aiplatform.googleapis.com"
+  credentialRef:
+    secretName: vertex-credentials
+  model:
+    name: claude-sonnet-4-5
+    contextWindow: 200000
+    tier: premium
