@@ -8,12 +8,15 @@ import (
 )
 
 func TestProviderEnvAnthropic(t *testing.T) {
+	// Isolate environment to verify Anthropic provider doesn't add Vertex variables
+	t.Setenv("CLAUDE_CODE_USE_VERTEX", "")
+	os.Unsetenv("CLAUDE_CODE_USE_VERTEX")
+
 	env, _ := providerEnv("anthropic", "claude-sonnet-4-5", "sk-ant-key", "https://api.anthropic.com")
 	assertEnvContains(t, env, "ANTHROPIC_API_KEY", "sk-ant-key")
 	assertEnvContains(t, env, "ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 	assertEnvContains(t, env, "ANTHROPIC_MODEL", "claude-sonnet-4-5")
-	// For anthropic provider, we don't add vertex-specific variables
-	// (though they may be inherited from the environment)
+	assertEnvNotPresent(t, env, "CLAUDE_CODE_USE_VERTEX")
 }
 
 func TestProviderEnvGCPVertex(t *testing.T) {
@@ -36,31 +39,45 @@ func TestProviderEnvGCPVertexRegionPrefixed(t *testing.T) {
 }
 
 func TestProviderEnvGCPVertexNoCredentialsJSON(t *testing.T) {
-	_, tempDirs := providerEnv("gcp-vertex-ai", "", "", "global-aiplatform.googleapis.com")
+	// Isolate environment to verify Vertex vars aren't added without credentials
+	t.Setenv("ANTHROPIC_VERTEX_PROJECT_ID", "")
+	os.Unsetenv("ANTHROPIC_VERTEX_PROJECT_ID")
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+	os.Unsetenv("GOOGLE_APPLICATION_CREDENTIALS")
+
+	env, tempDirs := providerEnv("gcp-vertex-ai", "", "", "global-aiplatform.googleapis.com")
 	if len(tempDirs) != 0 {
 		t.Errorf("expected no temp dirs without credentials JSON, got %v", tempDirs)
 	}
-	// When GOOGLE_APPLICATION_CREDENTIALS_JSON is not set, we don't create temp files
-	// or set the related vertex variables (from our code, not from pre-existing env)
+	assertEnvNotPresent(t, env, "ANTHROPIC_VERTEX_PROJECT_ID")
+	assertEnvNotPresent(t, env, "GOOGLE_APPLICATION_CREDENTIALS")
 }
 
 func TestProviderEnvUnmappedProvider(t *testing.T) {
-	// For unmapped providers, we don't add provider-specific variables
-	// (but the test param would be passed to the unmarked provider, so model won't be added either)
+	// Isolate environment to verify unmapped providers don't add any credentials
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	os.Unsetenv("ANTHROPIC_API_KEY")
+	t.Setenv("CLAUDE_CODE_USE_VERTEX", "")
+	os.Unsetenv("CLAUDE_CODE_USE_VERTEX")
+	t.Setenv("ANTHROPIC_MODEL", "")
+	os.Unsetenv("ANTHROPIC_MODEL")
+
 	env, _ := providerEnv("aws-bedrock", "some-model", "unused", "")
-	// Just verify that the function doesn't crash and returns an environment
-	if len(env) == 0 {
-		t.Errorf("expected non-empty environment")
-	}
+	assertEnvNotPresent(t, env, "ANTHROPIC_API_KEY")
+	assertEnvNotPresent(t, env, "CLAUDE_CODE_USE_VERTEX")
+	assertEnvNotPresent(t, env, "ANTHROPIC_MODEL")
 }
 
 func TestProviderEnvEmptyStringsAddNothing(t *testing.T) {
-	// With empty provider string, we don't add any provider-specific variables
+	// Isolate environment to verify empty provider adds no credentials
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	os.Unsetenv("ANTHROPIC_API_KEY")
+	t.Setenv("CLAUDE_CODE_USE_VERTEX", "")
+	os.Unsetenv("CLAUDE_CODE_USE_VERTEX")
+
 	env, _ := providerEnv("", "", "", "")
-	// Just verify that the function doesn't crash and returns an environment
-	if len(env) == 0 {
-		t.Errorf("expected non-empty environment")
-	}
+	assertEnvNotPresent(t, env, "ANTHROPIC_API_KEY")
+	assertEnvNotPresent(t, env, "CLAUDE_CODE_USE_VERTEX")
 }
 
 func TestVertexRegion(t *testing.T) {
