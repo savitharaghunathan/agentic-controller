@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/konveyor/migration-harness/internal/acp"
+	"github.com/konveyor/migration-harness/internal/claude"
 	"github.com/konveyor/migration-harness/internal/config"
 	"github.com/konveyor/migration-harness/internal/git"
 	"github.com/konveyor/migration-harness/internal/goose"
@@ -44,6 +45,14 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+// agentProcess is satisfied by both goose.ServeProcess and claude.Process
+// — runStage only needs liveness and shutdown, not runtime-specific
+// details.
+type agentProcess interface {
+	Alive() bool
+	Stop() error
 }
 
 func runStage(cmd *cobra.Command, args []string) error {
@@ -184,64 +193,114 @@ func runStage(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 5. Start goose serve. With the ACP tee (default) goose binds
-	// loopback on :4001 and the harness owns the pod's :4000 endpoint;
-	// with HARNESS_ACP_TEE=off goose takes :4000 itself as before.
-	logging.Header("Goose Setup")
-	goosePort := 0
-	if cfg.ACPTee {
-		goosePort = goose.LoopbackACPPort
-	}
-	srv, err := goose.StartServe(ctx, goose.ServeConfig{
-		Port:         goosePort,
-		BindLoopback: cfg.ACPTee,
-		SecretKey:    cfg.ACPSecretKey,
-		Provider:     cfg.Provider,
-		Model:        cfg.Model,
-		APIKey:       cfg.APIKey,
-		Endpoint:     cfg.Endpoint,
-	})
-	if err != nil {
-		return fmt.Errorf("start goose serve: %w", err)
-	}
-	defer srv.Stop()
-
-	// 6. Connect ACP, create session
-	wsClient, err := acp.WaitReadyDial(ctx, "127.0.0.1", srv.Port(), srv.SecretKey(), 30*time.Second)
-	if err != nil {
-		return fmt.Errorf("connect to goose: %w", err)
-	}
-	defer wsClient.Close()
-
-	session := acp.NewSessionClient(wsClient)
-	sessionID, err := session.CreateSession(ctx, cloneDir, nil)
-	if err != nil {
-		return fmt.Errorf("create session: %w", err)
-	}
-
-	// 6b. Expose the run: tee listener on the pod ACP port. Viewers get
-	// a verbatim pipe to goose plus the run session's live stream —
-	// message/thought chunks, tool calls, usage — and may redirect the
-	// run (steer/cancel) unless HARNESS_HITL_STEER=off. Permission asks
-	// are offered to whoever is watching. Failure here never fails the
-	// run — it only loses live viewers.
+	// 5. Start the agent runtime and connect ACP. The claude runtime
+	// (HARNESS_AGENT_RUNTIME=claude) speaks ACP over its own stdio
+	// instead of a dialable port, so the tee — goose-only for now, see
+	// docs/superpowers/specs/2026-08-21-claude-code-agent-runtime-design.md
+	// — is skipped entirely for that runtime.
+	var (
+		proc      agentProcess
+		session   *acp.SessionClient
+		sessionID string
+	)
 	var teeSrv *tee.Server
-	if cfg.ACPTee {
-		t := tee.New(tee.Config{
-			SecretKey:    cfg.ACPSecretKey,
-			UpstreamAddr: fmt.Sprintf("127.0.0.1:%d", srv.Port()),
-			HITLTimeout:  cfg.HITLTimeout,
-			SteerEnabled: cfg.HITLSteer,
+
+	switch cfg.AgentRuntime {
+	case "claude":
+		logging.Header("Claude Code Setup")
+		if cfg.ACPTee {
+			logging.Warn("HARNESS_ACP_TEE is on, but the claude runtime does not support the ACP tee yet — continuing without live viewers")
+		}
+
+		cp, err := claude.StartACP(ctx, claude.ACPConfig{
+			Provider: cfg.Provider,
+			Model:    cfg.Model,
+			APIKey:   cfg.APIKey,
+			Endpoint: cfg.Endpoint,
 		})
-		if err := t.Start(goose.DefaultACPPort); err != nil {
-			logging.Warn("ACP tee: %v — run continues without live viewers", err)
-		} else {
-			defer t.Stop()
-			t.AttachRun(wsClient, sessionID)
-			session.SetPermissionForwarder(t)
-			teeSrv = t
-			logging.Ok("ACP tee on :%d (goose loopback :%d, viewer steering %s)",
-				goose.DefaultACPPort, srv.Port(), map[bool]string{true: "on", false: "off"}[cfg.HITLSteer])
+		if err != nil {
+			return fmt.Errorf("start claude-agent-acp: %w", err)
+		}
+		defer cp.Stop()
+		proc = cp
+
+		stdioClient := acp.NewStdioClient(cp.Stdin(), cp.Stdout())
+		defer stdioClient.Close()
+
+		session = acp.NewSessionClient(stdioClient)
+		sessionID, err = session.CreateSession(ctx, cloneDir, nil)
+		if err != nil {
+			return fmt.Errorf("create session: %w", err)
+		}
+
+		// No live viewer can answer tool-use prompts for this runtime
+		// yet, so run unattended: bypassPermissions instead of the
+		// interactive default. answerAgentRequest's fail-closed deny
+		// remains the safety net if a request slips through anyway.
+		if err := session.SetConfigOption(ctx, sessionID, "mode", "bypassPermissions"); err != nil {
+			return fmt.Errorf("set claude session to unattended mode: %w", err)
+		}
+
+	default:
+		// Start goose serve. With the ACP tee (default) goose binds
+		// loopback on :4001 and the harness owns the pod's :4000
+		// endpoint; with HARNESS_ACP_TEE=off goose takes :4000 itself
+		// as before.
+		logging.Header("Goose Setup")
+		goosePort := 0
+		if cfg.ACPTee {
+			goosePort = goose.LoopbackACPPort
+		}
+		srv, err := goose.StartServe(ctx, goose.ServeConfig{
+			Port:         goosePort,
+			BindLoopback: cfg.ACPTee,
+			SecretKey:    cfg.ACPSecretKey,
+			Provider:     cfg.Provider,
+			Model:        cfg.Model,
+			APIKey:       cfg.APIKey,
+			Endpoint:     cfg.Endpoint,
+		})
+		if err != nil {
+			return fmt.Errorf("start goose serve: %w", err)
+		}
+		defer srv.Stop()
+		proc = srv
+
+		wsClient, err := acp.WaitReadyDial(ctx, "127.0.0.1", srv.Port(), srv.SecretKey(), 30*time.Second)
+		if err != nil {
+			return fmt.Errorf("connect to goose: %w", err)
+		}
+		defer wsClient.Close()
+
+		session = acp.NewSessionClient(wsClient)
+		sessionID, err = session.CreateSession(ctx, cloneDir, nil)
+		if err != nil {
+			return fmt.Errorf("create session: %w", err)
+		}
+
+		// Expose the run: tee listener on the pod ACP port. Viewers get
+		// a verbatim pipe to goose plus the run session's live stream —
+		// message/thought chunks, tool calls, usage — and may redirect
+		// the run (steer/cancel) unless HARNESS_HITL_STEER=off.
+		// Permission asks are offered to whoever is watching. Failure
+		// here never fails the run — it only loses live viewers.
+		if cfg.ACPTee {
+			t := tee.New(tee.Config{
+				SecretKey:    cfg.ACPSecretKey,
+				UpstreamAddr: fmt.Sprintf("127.0.0.1:%d", srv.Port()),
+				HITLTimeout:  cfg.HITLTimeout,
+				SteerEnabled: cfg.HITLSteer,
+			})
+			if err := t.Start(goose.DefaultACPPort); err != nil {
+				logging.Warn("ACP tee: %v — run continues without live viewers", err)
+			} else {
+				defer t.Stop()
+				t.AttachRun(wsClient, sessionID)
+				session.SetPermissionForwarder(t)
+				teeSrv = t
+				logging.Ok("ACP tee on :%d (goose loopback :%d, viewer steering %s)",
+					goose.DefaultACPPort, srv.Port(), map[bool]string{true: "on", false: "off"}[cfg.HITLSteer])
+			}
 		}
 	}
 
@@ -342,9 +401,9 @@ func runStage(cmd *cobra.Command, args []string) error {
 	}
 	emitPlan("completed", "completed", "in_progress")
 
-	// 10. Check goose health
-	if !srv.Alive() {
-		logging.Err("goose serve crashed")
+	// 10. Check the agent process health
+	if !proc.Alive() {
+		logging.Err("agent process crashed")
 	}
 
 	// 11. Check for uncommitted work
@@ -357,8 +416,8 @@ func runStage(cmd *cobra.Command, args []string) error {
 	// 12. Stop watcher before final push
 	w.Stop()
 
-	// 13. Determine exit status from ACP/goose signals
-	stageFailed := err != nil || !srv.Alive() || cancelled
+	// 13. Determine exit status from ACP/agent signals
+	stageFailed := err != nil || !proc.Alive() || cancelled
 
 	// 14. Final push (use a fresh context — the signal context may
 	// already be cancelled after SIGINT)

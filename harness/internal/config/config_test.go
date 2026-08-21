@@ -34,6 +34,7 @@ func clearKonveyorEnv(t *testing.T) {
 		"KONVEYOR_WORKFLOW_STAGE_COUNT",
 		"HUB_TOKEN_ID",
 		"HARNESS_ACP_TEE",
+		"HARNESS_AGENT_RUNTIME",
 		"HARNESS_HITL_STEER",
 		"HARNESS_HITL_TIMEOUT_SECONDS",
 	} {
@@ -145,6 +146,33 @@ func TestLoadFromEnv(t *testing.T) {
 		}
 		if cfg.MaxTurns != 500 {
 			t.Errorf("MaxTurns = %d, want 500", cfg.MaxTurns)
+		}
+	})
+
+	t.Run("AgentRuntime defaults to empty (goose)", func(t *testing.T) {
+		clearKonveyorEnv(t)
+		setRequiredEnv(t)
+
+		cfg, err := LoadFromEnv()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.AgentRuntime != "" {
+			t.Errorf("AgentRuntime = %q, want empty", cfg.AgentRuntime)
+		}
+	})
+
+	t.Run("reads HARNESS_AGENT_RUNTIME", func(t *testing.T) {
+		clearKonveyorEnv(t)
+		setRequiredEnv(t)
+		t.Setenv("HARNESS_AGENT_RUNTIME", "claude")
+
+		cfg, err := LoadFromEnv()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.AgentRuntime != "claude" {
+			t.Errorf("AgentRuntime = %q, want %q", cfg.AgentRuntime, "claude")
 		}
 	})
 }

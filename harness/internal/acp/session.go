@@ -9,18 +9,20 @@ import (
 	"github.com/konveyor/migration-harness/internal/logging"
 )
 
-// SessionClient wraps WSClient with ACP session operations.
+// SessionClient wraps an ACP transport (WSClient for goose, StdioClient
+// for claude-agent-acp and other stdio agents) with ACP session
+// operations.
 type SessionClient struct {
-	ws          *WSClient
+	ws          rpcConn
 	initialized bool
 
 	fwdMu     sync.Mutex
 	forwarder PermissionForwarder
 }
 
-// NewSessionClient creates a session client from an existing WebSocket
+// NewSessionClient creates a session client from an existing ACP
 // connection and takes over answering agent-initiated requests on it.
-func NewSessionClient(ws *WSClient) *SessionClient {
+func NewSessionClient(ws rpcConn) *SessionClient {
 	c := &SessionClient{ws: ws}
 	ws.SetAgentRequestHandler(c.answerAgentRequest)
 	return c
@@ -67,7 +69,7 @@ func (c *SessionClient) permissionForwarder() PermissionForwarder {
 
 // InitParams are required for the ACP initialize handshake.
 type InitParams struct {
-	ProtocolVersion string     `json:"protocolVersion"`
+	ProtocolVersion int        `json:"protocolVersion"`
 	ClientInfo      ClientInfo `json:"clientInfo"`
 	// ClientCapabilities is the ACP field name (the earlier "capabilities"
 	// spelling was never read by goose). The goose extension point lives
@@ -92,14 +94,17 @@ type InitResult struct {
 
 // Initialize performs the required ACP handshake. Must be called before
 // any session operations. protocolVersion is required — goose returns a
-// parse error without it.
+// parse error without it — and must be the numeric ACP protocol version
+// (currently 1): claude-agent-acp validates initialize params against the
+// ACP JSON schema, which types protocolVersion as an integer, and rejects
+// a string value with -32602 Invalid params.
 func (c *SessionClient) Initialize(ctx context.Context) (*InitResult, error) {
 	if c.initialized {
 		return nil, nil
 	}
 
 	result, _, err := c.ws.Call(ctx, "initialize", &InitParams{
-		ProtocolVersion: "0.1",
+		ProtocolVersion: 1,
 		ClientInfo: ClientInfo{
 			Name:    "migration-harness",
 			Version: "0.1.0",
@@ -192,6 +197,23 @@ func (c *SessionClient) CreateSession(ctx context.Context, cwd string, mcpServer
 	return sessionID, nil
 }
 
+// SetConfigOption sets a session-scoped config option (e.g. "mode",
+// "model") via session/set_config_option. Used by the claude runtime to
+// switch off tool-use confirmation prompts for unattended runs —
+// answerAgentRequest's fail-closed deny remains the safety net if a
+// permission request slips through anyway.
+func (c *SessionClient) SetConfigOption(ctx context.Context, sessionID, configID, value string) error {
+	_, _, err := c.ws.Call(ctx, "session/set_config_option", map[string]any{
+		"sessionId": sessionID,
+		"configId":  configID,
+		"value":     value,
+	})
+	if err != nil {
+		return fmt.Errorf("session/set_config_option(%s=%s): %w", configID, value, err)
+	}
+	return nil
+}
+
 // ContentBlock is a content item in a prompt.
 type ContentBlock struct {
 	Type string `json:"type"`
@@ -261,7 +283,7 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 				}
 				return result, nil
 			default:
-				return nil, fmt.Errorf("websocket connection closed during prompt")
+				return nil, fmt.Errorf("ACP connection closed during prompt")
 			}
 		case msg := <-notifCh:
 			if isToolCall(msg) {
@@ -275,7 +297,7 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 		case msg := <-respCh:
 			// Notifications buffered before the response still belong to
 			// this turn — drain them so a trailing chunk is not lost when
-			// select picks respCh first (mirrors WSClient.Call).
+			// select picks respCh first (mirrors Call's behavior on both transports).
 			for _, n := range drainNotifications(notifCh) {
 				handlePromptNotification(n, result)
 			}

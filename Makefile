@@ -74,6 +74,10 @@ e2e-setup: ## Create a Kind cluster with Agent Sandbox and deploy the controller
 harness-test: ## Build, load, and deploy the harness agent in Kind (requires e2e-setup).
 	hack/harness-test/setup.sh
 
+.PHONY: harness-claude-test
+harness-claude-test: ## Same as harness-test, but with HARNESS_AGENT_RUNTIME=claude (requires e2e-setup).
+	hack/harness-claude-test/setup.sh
+
 .PHONY: e2e-run
 e2e-run: ## Run the e2e test (cluster must be set up with e2e-setup).
 	hack/run-e2e.sh
