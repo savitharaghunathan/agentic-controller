@@ -48,6 +48,9 @@ func (f *fakeAgent) readLoop() {
 		}
 		f.inbound <- m
 	}
+	if err := scanner.Err(); err != nil {
+		f.t.Errorf("fakeAgent read: %v", err)
+	}
 }
 
 func (f *fakeAgent) push(frame string) {

@@ -76,6 +76,9 @@ func (c *StdioClient) readLoop() {
 			logging.Warn("ACP frame with neither id nor method — dropping")
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		logging.Warn("stdio read: %v", err)
+	}
 }
 
 func (c *StdioClient) fanOutNotification(resp *RPCResponse) {
