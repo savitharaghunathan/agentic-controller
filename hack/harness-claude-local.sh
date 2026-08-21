@@ -43,8 +43,8 @@ if [ -z "${HUB_BASE_URL:-}" ] && [ -f "$HUB_ENV_FILE" ]; then
     source "$HUB_ENV_FILE"
 fi
 : "${HUB_BASE_URL:?HUB_BASE_URL not set. Run ../hub-local.sh up, or export HUB_BASE_URL/HUB_TOKEN/HUB_TOKEN_ID/APP_ID yourself.}"
-: "${HUB_TOKEN:?HUB_TOKEN not set — see HUB_BASE_URL's error above.}"
-: "${APP_ID:?APP_ID not set — see HUB_BASE_URL's error above.}"
+: "${HUB_TOKEN:?HUB_TOKEN not set — see the HUB_BASE_URL error above.}"
+: "${APP_ID:?APP_ID not set — see the HUB_BASE_URL error above.}"
 if ! curl -s -o /dev/null "$HUB_BASE_URL/hub/applications"; then
     echo "ERROR: Hub not reachable at $HUB_BASE_URL" >&2
     exit 1
@@ -57,8 +57,13 @@ if ! command -v claude-agent-acp >/dev/null 2>&1; then
     INSTALL_DIR="${SCRIPT_DIR}/.claude-agent-acp"
     echo "  not on PATH — installing locally to $INSTALL_DIR"
     mkdir -p "$INSTALL_DIR"
-    (cd "$INSTALL_DIR" && npm install --no-save @agentclientprotocol/claude-agent-acp >/dev/null 2>&1)
+    # --prefix pins the install target explicitly: without it, npm walks up
+    # the directory tree looking for the nearest package.json and installs
+    # there instead (e.g. into $HOME, if a package.json happens to live
+    # there) rather than into INSTALL_DIR.
+    npm install --prefix "$INSTALL_DIR" @agentclientprotocol/claude-agent-acp
     export PATH="${INSTALL_DIR}/node_modules/.bin:${PATH}"
+    hash -r
 fi
 command -v claude-agent-acp >/dev/null 2>&1 || { echo "ERROR: claude-agent-acp still not found on PATH" >&2; exit 1; }
 echo "  using $(command -v claude-agent-acp)"
@@ -91,7 +96,7 @@ GOOGLE_APPLICATION_CREDENTIALS_JSON="$(cat "$ADC_PATH")"
 export GOOGLE_CLOUD_PROJECT="$GCP_PROJECT"
 export KONVEYOR_ACP_SECRET_KEY="${KONVEYOR_ACP_SECRET_KEY:-local-test-key}"
 export TARGET_BRANCH="${TARGET_BRANCH:-konveyor/claude-runtime-local-test-$TIMESTAMP}"
-export KONVEYOR_INSTRUCTIONS="${STAGE_PROMPT:-Read this repository's README and list its top-level source directories in your final message. Make no changes.}"
+export KONVEYOR_INSTRUCTIONS="${STAGE_PROMPT:-Read the README in this repository and list its top-level source directories in your final message. Make no changes.}"
 export HARNESS_ACP_TEE=off   # the ACP tee doesn't support the claude runtime yet
 export HARNESS_WORK_DIR="${HARNESS_WORK_DIR:-/tmp/harness-claude-local-repo}"
 rm -rf "$HARNESS_WORK_DIR"
