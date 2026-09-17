@@ -47,6 +47,7 @@ const (
 	// workflowRunRefIndexField is the field index for looking up
 	// AgentWorkflowRuns by workflowRef.
 	workflowRunRefIndexField = ".spec.workflowRef"
+	workflowGuideEnvName     = "KONVEYOR_WORKFLOW_GUIDE"
 )
 
 // AgentWorkflowRunReconciler reconciles an AgentWorkflowRun object.
@@ -473,7 +474,7 @@ func (r *AgentWorkflowRunReconciler) createAgentRunForStage(
 			return "", &configError{fmt.Errorf("workflow guide: %w", err)}
 		}
 		env = append(env, corev1.EnvVar{
-			Name:  "KONVEYOR_WORKFLOW_GUIDE",
+			Name:  workflowGuideEnvName,
 			Value: guide,
 		})
 	}

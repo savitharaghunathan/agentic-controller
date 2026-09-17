@@ -30,6 +30,7 @@ const (
 	testAppURL      = "https://example.com/app"
 	testWorkflowApp = "coolstore"
 	testNumParam    = "max_fix"
+	testMaxCost25   = "2.5"
 )
 
 func ptrInt(i int) *int { return &i }
@@ -120,8 +121,8 @@ func TestCoerceParamsInvalid(t *testing.T) {
 
 func TestSubstitute(t *testing.T) {
 	scopes := map[string]map[string]string{
-		"agent":    {testParamName: testAppURL},
-		"workflow": {"application_name": testWorkflowApp},
+		scopeAgent:    {testParamName: testAppURL},
+		scopeWorkflow: {"application_name": testWorkflowApp},
 	}
 
 	cases := []struct {
@@ -213,22 +214,22 @@ func TestResolveExecutionFieldMatrix(t *testing.T) {
 				Mode: konveyoriov1alpha1.ExecutionModeApprove,
 				ExecutionLimits: konveyoriov1alpha1.ExecutionLimits{
 					MaxTurns: turns50,
-					MaxCost:  "2.5",
+					MaxCost:  testMaxCost25,
 				},
 			},
 			base:      &konveyoriov1alpha1.ExecutionLimits{MaxTurns: turns200, MaxCost: "10"},
 			wantMode:  konveyoriov1alpha1.ExecutionModeApprove,
 			wantTurns: turns50,
-			wantCost:  "2.5",
+			wantCost:  testMaxCost25,
 		},
 		{
 			name: "partial override falls back per field",
 			override: &konveyoriov1alpha1.ExecutionSpec{
-				ExecutionLimits: konveyoriov1alpha1.ExecutionLimits{MaxCost: "2.5"},
+				ExecutionLimits: konveyoriov1alpha1.ExecutionLimits{MaxCost: testMaxCost25},
 			},
 			base:      &konveyoriov1alpha1.ExecutionLimits{MaxTurns: turns200, MaxCost: "10"},
 			wantTurns: turns200,
-			wantCost:  "2.5",
+			wantCost:  testMaxCost25,
 		},
 		{
 			name: "explicit zero turn pointer is preserved",

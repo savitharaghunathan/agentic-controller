@@ -32,6 +32,8 @@ import (
 	konveyoriov1alpha1 "github.com/konveyor/agentic-controller/api/v1alpha1"
 )
 
+const idempotencyWorkflowRunName = "workflow-run"
+
 func workflowRunTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -45,16 +47,16 @@ func TestCreateAgentRunForStageAdoptsOwnedExistingChild(t *testing.T) {
 	scheme := workflowRunTestScheme(t)
 	parent := &konveyoriov1alpha1.AgentWorkflowRun{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "workflow-run",
-			Namespace: "default",
+			Name:      idempotencyWorkflowRunName,
+			Namespace: testNamespace,
 			UID:       types.UID("workflow-run-uid"),
 		},
 	}
 	agent := &konveyoriov1alpha1.Agent{
-		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: parent.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: scopeAgent, Namespace: parent.Namespace},
 	}
 	stage := &konveyoriov1alpha1.AgentWorkflowStage{
-		Name:     "stage-a",
+		Name:     stageAName,
 		AgentRef: agent.Name,
 	}
 	childName := stageAgentRunName(parent.Name, stage.Name)
@@ -106,16 +108,16 @@ func TestCreateAgentRunForStageRejectsForeignExistingChild(t *testing.T) {
 	scheme := workflowRunTestScheme(t)
 	parent := &konveyoriov1alpha1.AgentWorkflowRun{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "workflow-run",
-			Namespace: "default",
+			Name:      idempotencyWorkflowRunName,
+			Namespace: testNamespace,
 			UID:       types.UID("workflow-run-uid"),
 		},
 	}
 	agent := &konveyoriov1alpha1.Agent{
-		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: parent.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: scopeAgent, Namespace: parent.Namespace},
 	}
 	stage := &konveyoriov1alpha1.AgentWorkflowStage{
-		Name:     "stage-a",
+		Name:     stageAName,
 		AgentRef: agent.Name,
 	}
 	foreign := &konveyoriov1alpha1.AgentRun{
@@ -142,20 +144,20 @@ func TestReconcileAdoptsExistingStageAfterStatusLoss(t *testing.T) {
 	scheme := workflowRunTestScheme(t)
 	parent := &konveyoriov1alpha1.AgentWorkflowRun{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "workflow-run",
-			Namespace: "default",
+			Name:      idempotencyWorkflowRunName,
+			Namespace: testNamespace,
 			UID:       types.UID("workflow-run-uid"),
 		},
 		Spec: konveyoriov1alpha1.AgentWorkflowRunSpec{
-			WorkflowRef: "workflow",
+			WorkflowRef: scopeWorkflow,
 		},
 	}
 	workflow := &konveyoriov1alpha1.AgentWorkflow{
-		ObjectMeta: metav1.ObjectMeta{Name: "workflow", Namespace: parent.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: scopeWorkflow, Namespace: parent.Namespace},
 		Spec: konveyoriov1alpha1.AgentWorkflowSpec{
 			Stages: []konveyoriov1alpha1.AgentWorkflowStage{{
-				Name:     "stage-a",
-				AgentRef: "agent",
+				Name:     stageAName,
+				AgentRef: scopeAgent,
 			}},
 		},
 		Status: konveyoriov1alpha1.AgentWorkflowStatus{},
@@ -166,12 +168,12 @@ func TestReconcileAdoptsExistingStageAfterStatusLoss(t *testing.T) {
 		Reason: reasonSucceeded,
 	})
 	agent := &konveyoriov1alpha1.Agent{
-		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: parent.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: scopeAgent, Namespace: parent.Namespace},
 	}
 	controller := true
 	child := &konveyoriov1alpha1.AgentRun{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      stageAgentRunName(parent.Name, "stage-a"),
+			Name:      stageAgentRunName(parent.Name, stageAName),
 			Namespace: parent.Namespace,
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion:         konveyoriov1alpha1.GroupVersion.String(),
