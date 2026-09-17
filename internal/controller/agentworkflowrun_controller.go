@@ -281,8 +281,13 @@ func (r *AgentWorkflowRunReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	// Mirror the AgentRun's phase onto the stage status for display.
-	stageStatus.Phase = agentRun.Status.Phase
+	// Mirror the AgentRun's phase onto the stage status for display. A newly
+	// created AgentRun can be observed before its own controller has initialized
+	// status.phase; preserve the stage's Pending value during that short window
+	// rather than writing an empty value that violates the CRD enum.
+	if agentRun.Status.Phase != "" {
+		stageStatus.Phase = agentRun.Status.Phase
+	}
 
 	// Sequence on the AgentRun's Succeeded condition, not phase (ADR 0018):
 	// True advances to the next stage, False (failure or limit reached)
