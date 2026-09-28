@@ -14,6 +14,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 CONTAINER_TOOL="${CONTAINER_TOOL:-podman}"
 KIND_CLUSTER="${KIND_CLUSTER:-agentic-controller-e2e}"
+NAMESPACE="${NAMESPACE:-default}"
+SKIP_AGENT_BUILD="${SKIP_AGENT_BUILD:-false}"
 
 echo "=== Creating secrets ==="
 
@@ -25,6 +27,7 @@ if [ ! -f "$ADC_PATH" ]; then
     exit 1
 fi
 kubectl create secret generic vertex-credentials \
+    --namespace "$NAMESPACE" \
     --from-file=GOOGLE_APPLICATION_CREDENTIALS_JSON="$ADC_PATH" \
     --dry-run=client -o yaml | kubectl apply -f -
 echo "  vertex-credentials created"
@@ -38,7 +41,11 @@ echo "  hub token set (HUB_TOKEN_ID=${HUB_TOKEN_ID:-<unset>})"
 
 echo ""
 echo "=== Building agent images ==="
-make -C "$REPO_ROOT" agent-java-build CONTAINER_TOOL="$CONTAINER_TOOL"
+if [ "$SKIP_AGENT_BUILD" = "true" ]; then
+    echo "  skipped (using prebuilt agent images)"
+else
+    make -C "$REPO_ROOT" agent-java-build CONTAINER_TOOL="$CONTAINER_TOOL"
+fi
 
 echo ""
 echo "=== Building skill images ==="
@@ -52,8 +59,17 @@ for SKILL in "${SKILL_DIRS[@]}"; do
         echo "  WARN: skill dir $SKILL_PATH not found, skipping"
         continue
     fi
-    echo "FROM scratch
-COPY . /" | $CONTAINER_TOOL build -t "${SKILL_IMAGE}:${SKILL}" -f - "$SKILL_PATH"
+    # Build from a clean context. Passing the Containerfile on stdin to a
+    # remote Podman machine can make its macOS temporary path appear in the
+    # context, which then gets copied into the scratch image.
+    SKILL_CONTEXT=$(mktemp -d)
+    cp -R "$SKILL_PATH"/. "$SKILL_CONTEXT"/
+    cat > "$SKILL_CONTEXT/Containerfile" <<'SKILLEOF'
+FROM scratch
+COPY . /
+SKILLEOF
+    $CONTAINER_TOOL build -t "${SKILL_IMAGE}:${SKILL}" "$SKILL_CONTEXT"
+    rm -rf "$SKILL_CONTEXT"
     echo "  built ${SKILL_IMAGE}:${SKILL}"
 done
 
@@ -101,17 +117,17 @@ if [ -z "$GCP_PROJECT_ID" ]; then
     exit 1
 fi
 echo "  GCP project: (set)"
-sed "s/__GCP_PROJECT_ID__/$GCP_PROJECT_ID/" "$SCRIPT_DIR/resources.yaml" | kubectl apply -f -
-TIMESTAMP=$(date +%s)
+sed "s/__GCP_PROJECT_ID__/$GCP_PROJECT_ID/" "$SCRIPT_DIR/resources.yaml" | kubectl apply -n "$NAMESPACE" -f -
+TIMESTAMP="${WORKFLOW_TIMESTAMP:-$(date +%s)}"
 sed -e "s/__GCP_PROJECT_ID__/$GCP_PROJECT_ID/g" \
     -e "s/__TIMESTAMP__/$TIMESTAMP/g" \
     -e "s|__HUB_TOKEN__|$HUB_TOKEN|g" \
     -e "s|__HUB_TOKEN_ID__|${HUB_TOKEN_ID:-}|g" \
-    "$SCRIPT_DIR/workflow-resources.yaml" | kubectl apply -f -
+    "$SCRIPT_DIR/workflow-resources.yaml" | kubectl apply -n "$NAMESPACE" -f -
 echo "  AgentWorkflowRun: coolstore-migration-$TIMESTAMP"
 
 echo ""
 echo "=== Done ==="
-echo "Watch the run: kubectl get agentworkflowrun coolstore-migration-$TIMESTAMP -w"
-echo "Check pods:    kubectl get pods"
-echo "View logs:     kubectl logs -f coolstore-migration-${TIMESTAMP}-plan -c agent"
+echo "Watch the run: kubectl get agentworkflowrun coolstore-migration-$TIMESTAMP -n $NAMESPACE -w"
+echo "Check pods:    kubectl get pods -n $NAMESPACE"
+echo "View logs:     kubectl logs -n $NAMESPACE -f coolstore-migration-${TIMESTAMP}-plan -c agent"
