@@ -25,7 +25,8 @@ const defaultExecutionMode = konveyoriov1alpha1.ExecutionModeAuto
 // resolveExecution merges an override ExecutionSpec (from an AgentRun or
 // a workflow stage) over the Agent's default ExecutionLimits, field by
 // field: each field takes the override's value if set, else the Agent
-// default. Mode comes only from the override — the Agent declares no mode
+// default. Mode and AskUser come only from the override — they are
+// execution-time supervision choices the Agent does not declare
 // (ADR 0011/0018). Either argument may be nil. Returns nil only when both
 // inputs contribute nothing, so callers can leave Execution unset on the
 // child.
@@ -50,7 +51,8 @@ func resolveExecution(
 	}
 
 	resolved := &konveyoriov1alpha1.ExecutionSpec{
-		Mode: override.Mode,
+		Mode:    override.Mode,
+		AskUser: override.AskUser,
 		ExecutionLimits: konveyoriov1alpha1.ExecutionLimits{
 			MaxTurns: override.MaxTurns,
 			MaxCost:  override.MaxCost,
@@ -63,7 +65,7 @@ func resolveExecution(
 		resolved.MaxCost = base.MaxCost
 	}
 
-	if resolved.Mode == "" && resolved.MaxTurns == nil && resolved.MaxCost == "" {
+	if resolved.Mode == "" && !resolved.AskUser && resolved.MaxTurns == nil && resolved.MaxCost == "" {
 		return nil
 	}
 	return resolved

@@ -66,7 +66,11 @@ type Config struct {
 	// MCP server) whose questions reach attached viewers as
 	// elicitation/create asks and block the turn until answered; with
 	// nobody watching they fail closed (cancelled, never answered for the
-	// human). Default on; HARNESS_HITL_ASK=off leaves the tool out.
+	// human). Default OFF: that failure mode is only acceptable to a run
+	// somebody chose to watch, so the tool is opt-in — params.json
+	// execution.askUser (AgentRun/stage spec.execution.askUser), or
+	// HARNESS_HITL_ASK=on for a harness run outside the controller.
+	// HARNESS_HITL_ASK=off wins over both.
 	HITLAsk bool
 
 	// Prompt context layers, composed by internal/prompt.
@@ -188,7 +192,10 @@ func LoadFromEnv() (*Config, error) {
 	// (and steering), so only an explicit opt-out disables them.
 	cfg.ACPTee = !envSwitchedOff("HARNESS_ACP_TEE")
 	cfg.HITLSteer = !envSwitchedOff("HARNESS_HITL_STEER")
-	cfg.HITLAsk = !envSwitchedOff("HARNESS_HITL_ASK")
+	// ask_user is the exception: it is the one HITL feature that can FAIL
+	// a run (an unanswered question, ADR 0017), so it is opt-in.
+	cfg.HITLAsk = (cfg.Params.Execution.AskUser || envSwitchedOn("HARNESS_HITL_ASK")) &&
+		!envSwitchedOff("HARNESS_HITL_ASK")
 	if n, err := strconv.Atoi(os.Getenv("HARNESS_HITL_TIMEOUT_SECONDS")); err == nil && n > 0 {
 		// Ceiling: a single ask parking the run for hours isn't HITL,
 		// it's abandonment — the pod deadline should not be spent inside
@@ -207,6 +214,14 @@ func LoadFromEnv() (*Config, error) {
 func envSwitchedOff(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
 	case "off", "false", "0", "disabled":
+		return true
+	}
+	return false
+}
+
+func envSwitchedOn(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "on", "true", "1", "enabled":
 		return true
 	}
 	return false

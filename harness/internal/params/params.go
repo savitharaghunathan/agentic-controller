@@ -45,6 +45,7 @@ func NativeTurnLimit(maxTurns int) int {
 // workflow/agent param maps, so they get their own typed section.
 type Execution struct {
 	Mode     string `json:"mode,omitempty"`
+	AskUser  bool   `json:"askUser,omitempty"`
 	MaxTurns int    `json:"maxTurns,omitempty"`
 	MaxCost  string `json:"maxCost,omitempty"`
 }

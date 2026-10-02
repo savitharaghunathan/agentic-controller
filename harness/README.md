@@ -86,7 +86,7 @@ Configuration comes from two sources: environment variables (required and option
 | `HARNESS_ACP_TEE` | `on` | `off` disables the ACP tee; goose then owns :4000 directly |
 | `HARNESS_HITL_STEER` | `on` | `off` makes the run stream watch-only: viewer steer/cancel frames for the run session are refused instead of relayed |
 | `HARNESS_HITL_TIMEOUT_SECONDS` | `180` | How long a permission ask or an `ask_user` question waits for an attached viewer; values above 600 are clamped to 600 |
-| `HARNESS_HITL_ASK` | `on` | `off` leaves the `ask_user` tool out of the session (the agent then has no way to block on a human answer) |
+| `HARNESS_HITL_ASK` | — | The `ask_user` tool is opt-in, normally via the run's `spec.execution.askUser` (params.json `execution.askUser`). `on` mounts it for a harness run outside the controller; `off` leaves it out even when the run asked for it |
 
 ### Parameters (`/run/konveyor/params.json`)
 
@@ -222,7 +222,9 @@ verbatim). Everything else fails closed: nobody attached denies
 immediately, and an ask no viewer answers within
 `HARNESS_HITL_TIMEOUT_SECONDS` denies too.
 
-**Questions from the agent (`ask_user`).** The session mounts a stdio
+**Questions from the agent (`ask_user`).** Opt-in, because an unanswered
+question fails the run: only when the run sets `spec.execution.askUser`
+(or `HARNESS_HITL_ASK=on`), the session mounts a stdio
 MCP server that is the entry point binary itself (`migration-harness
 ask-user-mcp`), giving the agent one tool: `ask_user(question, options?)`.
 A call becomes an MCP `elicitation/create` that goose relays over ACP to

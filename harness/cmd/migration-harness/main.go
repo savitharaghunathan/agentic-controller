@@ -318,7 +318,9 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 		return 1, fmt.Errorf("create session: %w", err)
 	}
 	if len(mcpServers) > 0 {
-		logging.Ok("ask_user tool mounted (questions reach attached viewers; HARNESS_HITL_ASK=off to disable)")
+		logging.Ok("ask_user tool mounted (questions reach attached viewers; an unanswered one fails the run)")
+	} else if !cfg.HITLAsk {
+		logging.Info("ask_user tool not mounted (opt in with spec.execution.askUser or HARNESS_HITL_ASK=on)")
 	}
 
 	// 6b. Expose the run: tee listener on the pod ACP port. Viewers get

@@ -230,6 +230,17 @@ _Avoid_: `smart_approve` (goose-specific, functionally identical to
 `approve` for agents that write files and run commands);
 `interactive`/`non-interactive` (use `approve`/`auto` instead).
 
+**Ask User** — Opt-in permission for the agent to stop mid-turn and
+put a question to the viewers attached to the run (`ask_user` tool,
+ADR 0017). Set as `askUser` next to mode: on AgentRun for standalone
+runs, on individual AgentWorkflow stages for workflow runs. Defaults to
+off, independently of mode, because the gate is fail-closed: a question
+nobody answers within the HITL timeout fails the run, and only a run
+somebody chose to watch should be able to fail that way.
+_Avoid_: treating it as part of `approve` — approval gates the agent's
+tool calls, asking is the agent's own initiative, and a run may want
+either without the other.
+
 **Execution Limits** — Optional budget constraints on an agent
 execution: `maxTurns` (tool-call turns) and `maxCost` (cumulative
 USD). Set on Agent as defaults, overrideable per stage and per run.

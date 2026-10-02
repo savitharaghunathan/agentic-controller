@@ -180,6 +180,23 @@ func TestResolveExecution(t *testing.T) {
 		t.Errorf("maxCost = %q, want 10.00 (base fallback)", got.MaxCost)
 	}
 
+	if got.AskUser {
+		t.Errorf("askUser = true, want false when the override leaves it unset")
+	}
+
+	// AskUser, like mode, comes only from the override, and alone is
+	// enough to keep the resolved spec non-nil.
+	got = resolveExecution(&konveyoriov1alpha1.ExecutionSpec{AskUser: true}, nil)
+	if got == nil || !got.AskUser {
+		t.Errorf("askUser-only override resolved to %+v, want AskUser=true", got)
+	}
+	if section := executionSection(got); section["askUser"] != true {
+		t.Errorf("execution section = %v, want askUser: true", section)
+	}
+	if _, ok := executionSection(nil)["askUser"]; ok {
+		t.Errorf("askUser must be absent from params.json unless opted into")
+	}
+
 	// Both nil -> nil.
 	if resolveExecution(nil, nil) != nil {
 		t.Errorf("resolveExecution(nil, nil) should be nil")

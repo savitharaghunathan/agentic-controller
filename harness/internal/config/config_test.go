@@ -36,6 +36,7 @@ func clearKonveyorEnv(t *testing.T) {
 		"HUB_TOKEN_ID",
 		"HARNESS_ACP_TEE",
 		"HARNESS_HITL_STEER",
+		"HARNESS_HITL_ASK",
 		"HARNESS_HITL_TIMEOUT_SECONDS",
 		"KONVEYOR_GIT_AUTHOR_NAME",
 		"KONVEYOR_GIT_AUTHOR_EMAIL",
@@ -537,5 +538,41 @@ func TestHITLTimeoutClampedAndSteerSwitch(t *testing.T) {
 	}
 	if cfg.HITLSteer {
 		t.Error("HARNESS_HITL_STEER=OFF (padded, uppercase) should disable steering")
+	}
+}
+
+// ask_user can fail a run (an unanswered question, ADR 0017), so unlike
+// the tee and steering it is opt-in: off by default, on via the run's
+// execution.askUser or HARNESS_HITL_ASK=on, and HARNESS_HITL_ASK=off beats
+// both.
+func TestHITLAskIsOptIn(t *testing.T) {
+	const askOn = `{"execution": {"askUser": true}}`
+	for _, tc := range []struct {
+		name, params, env string
+		want              bool
+	}{
+		{name: "default", want: false},
+		{name: "run opts in", params: askOn, want: true},
+		{name: "env opts in", env: " ON ", want: true},
+		{name: "env off beats the run", params: askOn, env: "off", want: false},
+		{name: "unrecognised env is not an opt-in", env: "maybe", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearKonveyorEnv(t)
+			setRequiredEnv(t)
+			if tc.params != "" {
+				t.Setenv("HARNESS_PARAMS_FILE", writeParamsFile(t, tc.params))
+			}
+			if tc.env != "" {
+				t.Setenv("HARNESS_HITL_ASK", tc.env)
+			}
+			cfg, err := LoadFromEnv()
+			if err != nil {
+				t.Fatalf("LoadFromEnv: %v", err)
+			}
+			if cfg.HITLAsk != tc.want {
+				t.Errorf("HITLAsk = %v, want %v", cfg.HITLAsk, tc.want)
+			}
+		})
 	}
 }

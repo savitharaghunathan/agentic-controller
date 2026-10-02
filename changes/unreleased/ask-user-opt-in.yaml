@@ -1,0 +1,14 @@
+kind: bugfix
+
+description: >
+  The agent's ask_user tool is now opt-in. It shipped default-on (#161),
+  which also told every run "a human may be watching" — so a run nobody was
+  attached to could be failed by a question nobody saw, and mode: auto was
+  not the headless-safe policy it is documented to be. A run now gets the
+  tool only when it asks for it: spec.execution.askUser on an AgentRun or an
+  AgentWorkflow stage (next to mode; delivered to the harness as
+  execution.askUser in params.json), or HARNESS_HITL_ASK=on for a harness run
+  outside the controller. HARNESS_HITL_ASK=off still wins over both. Note for
+  upgraders: runs that want question cards must now set askUser: true;
+  nothing else about ask_user changes — an unanswered question still fails
+  the run.

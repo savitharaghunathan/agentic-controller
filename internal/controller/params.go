@@ -242,12 +242,15 @@ func stringifyJSON(v any) string {
 
 // executionSection renders the resolved ExecutionSpec into the map
 // written to the execution section of params.json. Mode is always
-// present (defaulted to auto); limits appear only when set.
+// present (defaulted to auto); askUser and limits appear only when set.
 func executionSection(exec *konveyoriov1alpha1.ExecutionSpec) map[string]any {
 	section := map[string]any{
 		"mode": string(effectiveMode(exec)),
 	}
 	if exec != nil {
+		if exec.AskUser {
+			section["askUser"] = true
+		}
 		if exec.MaxTurns != nil {
 			section["maxTurns"] = *exec.MaxTurns
 		}

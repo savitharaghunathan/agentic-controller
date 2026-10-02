@@ -4,7 +4,7 @@ title: "In-turn human questions via the ask_user tool and ACP elicitation"
 description: "Defines the ask_user MCP tool and ACP elicitation path for interactive human questions during an AgentRun."
 status: proposed
 date: "2026-08-20"
-last_updated: "2026-08-31"
+last_updated: "2026-09-17"
 authors: []
 last_reviewed: "2026-08-31"
 implementation_status: in-sync
@@ -23,6 +23,22 @@ relates_to:
 `ask_user` stdio MCP server, ACP elicitation forwarding, pending-question
 replay, resolution frames, and fail-closed timeout behavior described here.
 The ADR remains proposed pending formal acceptance.
+
+**Update (2026-09-17):** `ask_user` is now opt-in. Decision 1 shipped it
+default-on with `HARNESS_HITL_ASK=off` as the opt-out, which put the burden
+on the wrong runs: an unattended run is the common case (workflow stages,
+anything started and left), whether the model asks is its own call, and the
+fail-closed gate then fails a run over a question nobody was there to see —
+observed on the ROKS demo cluster, where the same Agent and prompt Succeeded
+once and then Failed at turn 38 on an unanswered `ask_user`. It also made
+`mode: auto` not the "headless-safe" policy CONTEXT.md says it is. The tool
+is now mounted only when the run opts in: `spec.execution.askUser: true` on
+the AgentRun or workflow stage (delivered as `execution.askUser` in
+params.json), or `HARNESS_HITL_ASK=on` for a harness run outside the
+controller; `HARNESS_HITL_ASK=off` still wins. Nothing else in this ADR
+changes — in particular the gate stays fail-closed, and there is still no
+"ask but proceed on timeout" mode. Opting out never made the agent guess; it
+removes the tool, which is the pre-#161 behavior.
 
 ## Context
 
@@ -71,8 +87,9 @@ The agent asks by calling one tool: `ask_user(question, options?)`.
 Models reliably invoke tools mid-turn, and the tool result re-grounds
 the model with the authoritative outcome — "The human answered: …", the
 human declined, or nobody answered — never an invented answer. Whether
-the agent *can* ask is per-session policy: `HARNESS_HITL_ASK=off` simply
-leaves the tool out of the session (default on).
+the agent *can* ask is per-session policy: the tool is in the session only
+when the run opts in (`spec.execution.askUser`, or `HARNESS_HITL_ASK=on`;
+originally default on — see the 2026-09-17 update).
 
 ### 2. The harness binary is itself the MCP server
 
@@ -191,8 +208,10 @@ write on the stream at all is the Hub's authorization question
   parked until "postgres" was chosen, and the final answer named it.
 - Headless and unattended runs no longer proceed past a question: an
   `ask_user` call with nobody to answer fails the run (fail closed)
-  instead of degrading to a guess. A run that must complete unattended
-  sets `HARNESS_HITL_ASK=off`.
+  instead of degrading to a guess. Because of that, asking is opt-in
+  (2026-09-17 update): a run somebody will watch sets
+  `spec.execution.askUser: true`; every other run has no `ask_user` tool
+  and so cannot be failed this way.
 - The console must handle the resolution frame (Decision 5a) to close its
   cards — a companion change in tackle2-ui alongside the card renderer.
 - Viewers receive a form-renderable schema, so consoles can show a real

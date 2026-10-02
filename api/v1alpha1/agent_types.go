@@ -143,6 +143,15 @@ type ExecutionSpec struct {
 	// +optional
 	Mode ExecutionMode `json:"mode,omitempty"`
 
+	// AskUser gives the agent the ask_user tool: it may stop mid-turn and
+	// put a question to the viewers attached to the run (ADR 0017). An
+	// unanswered question fails the run — the harness never answers for
+	// the human — so set this only for a run somebody will be watching.
+	// Defaults to false: a run nobody opted into supervising cannot be
+	// failed by a question nobody saw.
+	// +optional
+	AskUser bool `json:"askUser,omitempty"`
+
 	// ExecutionLimits are the budget ceilings (maxTurns, maxCost),
 	// resolved against the Agent's defaults.
 	ExecutionLimits `json:",inline"`

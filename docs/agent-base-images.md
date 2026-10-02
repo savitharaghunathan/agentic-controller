@@ -219,8 +219,12 @@ to `off` only when the behavior is deliberately disabled:
 | --- | --- |
 | `HARNESS_ACP_TEE` | Disable the harness ACP tee |
 | `HARNESS_HITL_STEER` | Refuse viewer steer/cancel frames |
-| `HARNESS_HITL_ASK` | Remove the `ask_user` tool |
 | `HARNESS_HITL_TIMEOUT_SECONDS` | Viewer wait timeout, capped at 600 seconds |
+
+`ask_user` is the exception — it is off unless the run opts in with
+`spec.execution.askUser`, because a question no viewer answers fails the
+run. `HARNESS_HITL_ASK=on` mounts it without the controller; `off` leaves it
+out regardless.
 
 The controller writes execution controls and parameter values as JSON:
 
