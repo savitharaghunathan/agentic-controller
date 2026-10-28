@@ -1,0 +1,267 @@
+# Multi-stage AgentWorkflow for the MigIQ migration pipeline.
+#
+# Splits Dylan's single-stage "migrate" Agent/AgentWorkflow
+# (deploy-migiq-agentic.sh, shared in #konveyor-agentic-controller) into
+# plan / execute / containerize / deploy stages, each a fresh agent session.
+#
+# Assumes the SkillCards from deploy-migiq-agentic.sh already exist in the
+# target namespace (rgctl, mig-rgctl, mig-prompt-builder, mig-plan,
+# mig-execute, mig-test-gen, mig-containerize, mig-deploy). This manifest
+# only adds narrower, per-stage SkillCollections, one Agent per stage, and a
+# multi-stage AgentWorkflow to replace the single-stage one.
+#
+# Verified against the actual migIQ skill sources
+# (local_dev/konveyor/migIQ/*/SKILL.md): every stage boundary here is a
+# committed-file handoff, not same-session memory, with one real gap --
+# mig-containerize's SKILL.md never names an output directory, and
+# mig-deploy's prerequisite checks are hardcoded against the current working
+# directory. The containerize stage's instructions below pin that down to
+# the repo root, since mig-deploy's shell checks are the harder side to
+# change. Report stage (migiq phase 5 / MIGRATION_REPORT.md) is deliberately
+# left out of this draft -- not yet clear it's separable from mig-execute's
+# own report, see the design discussion before adding one.
+#
+# rgctl/mig-rgctl are wired into every stage, not just plan: mig-execute,
+# mig-containerize, and mig-deploy all explicitly invoke rgctl/mig-rgctl
+# directly in their own SKILL.md (blast-radius during refactors,
+# containerization-blocker/dependency analysis, endpoint discovery for
+# post-deploy testing). mig-containerize and mig-deploy also carry the same
+# stale GQL `WHERE`-clause drift bug mig-rgctl's reference file has --
+# stage instructions tell the agent to prefer the upstream rgctl skill's
+# command syntax when they conflict.
+#
+# Base image: all four Agents below use quay.io/dymurray/agent-migiq:latest,
+# which Dylan's deploy-migiq-agentic.sh already describes as "agent-base +
+# rgctl" -- no new base image is needed for this track, unlike
+# docs/spikes/263-results/seeded-workflow-example.yaml's catalog-skill
+# track, which still uses quay.io/konveyor/agent-java:dev (no rgctl baked
+# in yet, blocked on sshaaf/rgctl#127's arm64 gap). This image is also
+# assumed, not verified, to contain podman/buildah/oc for the
+# containerize/deploy stages -- separately, running a container build
+# inside an Agent Sandbox pod at all is an open architectural question
+# (the pod has no SecurityContext/privileged escape hatch configured
+# anywhere in this repo), and there is no existing mechanism for handing a
+# pod credentials/RBAC for a target cluster distinct from the one running
+# the controller. Neither gap is specific to this manifest; both block
+# containerize/deploy regardless of image contents -- see issue #261.
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCollection
+metadata:
+  name: migiq-plan-skills
+  labels:
+    konveyor.io/managed: "true"
+spec:
+  version: "0.2.3"
+  skills:
+    - name: rgctl
+      skillCardRef: rgctl
+    - name: mig-rgctl
+      skillCardRef: mig-rgctl
+    - name: mig-prompt-builder
+      skillCardRef: mig-prompt-builder
+    - name: mig-plan
+      skillCardRef: mig-plan
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCollection
+metadata:
+  name: migiq-execute-skills
+  labels:
+    konveyor.io/managed: "true"
+spec:
+  version: "0.2.3"
+  skills:
+    - name: rgctl
+      skillCardRef: rgctl
+    - name: mig-rgctl
+      skillCardRef: mig-rgctl
+    - name: mig-execute
+      skillCardRef: mig-execute
+    - name: mig-test-gen
+      skillCardRef: mig-test-gen
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCollection
+metadata:
+  name: migiq-containerize-skills
+  labels:
+    konveyor.io/managed: "true"
+spec:
+  version: "0.2.3"
+  skills:
+    - name: rgctl
+      skillCardRef: rgctl
+    - name: mig-rgctl
+      skillCardRef: mig-rgctl
+    - name: mig-containerize
+      skillCardRef: mig-containerize
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCollection
+metadata:
+  name: migiq-deploy-skills
+  labels:
+    konveyor.io/managed: "true"
+spec:
+  version: "0.2.3"
+  skills:
+    - name: rgctl
+      skillCardRef: rgctl
+    - name: mig-rgctl
+      skillCardRef: mig-rgctl
+    - name: mig-deploy
+      skillCardRef: mig-deploy
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: Agent
+metadata:
+  name: migiq-planner
+  labels:
+    konveyor.io/managed: "true"
+spec:
+  image: quay.io/dymurray/agent-migiq:latest
+  prompt: |
+    You are the MigIQ Planner. Index the codebase with rgctl, gather
+    migration requirements, and produce a dependency-ordered migration plan.
+  skillCollections:
+    - ref: migiq-plan-skills
+  execution:
+    maxTurns: 120
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: Agent
+metadata:
+  name: migiq-executor
+  labels:
+    konveyor.io/managed: "true"
+spec:
+  image: quay.io/dymurray/agent-migiq:latest
+  prompt: |
+    You are the MigIQ Executor. Execute the migration plan and generate
+    tests for the resulting changes.
+  skillCollections:
+    - ref: migiq-execute-skills
+  execution:
+    maxTurns: 150
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: Agent
+metadata:
+  name: migiq-containerizer
+  labels:
+    konveyor.io/managed: "true"
+spec:
+  image: quay.io/dymurray/agent-migiq:latest
+  prompt: |
+    You are the MigIQ Containerizer. Containerize the migrated application
+    for OpenShift.
+  skillCollections:
+    - ref: migiq-containerize-skills
+  execution:
+    maxTurns: 150
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: Agent
+metadata:
+  name: migiq-deployer
+  labels:
+    konveyor.io/managed: "true"
+spec:
+  image: quay.io/dymurray/agent-migiq:latest
+  prompt: |
+    You are the MigIQ Deployer. Deploy the containerized application to
+    OpenShift.
+  skillCollections:
+    - ref: migiq-deploy-skills
+  execution:
+    maxTurns: 150
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: migiq-migration-multistage
+  labels:
+    konveyor.io/managed: "true"
+spec:
+  guide: >-
+    Run a MigIQ application migration across separate plan, execute,
+    containerize, and deploy stages, each a fresh agent session reading the
+    prior stage's committed artifacts rather than sharing one continuous
+    session.
+  stages:
+    - name: plan
+      agentRef: migiq-planner
+      instructions: >-
+        Load the mig-rgctl, mig-prompt-builder, and mig-plan skills in order
+        and follow each one's SKILL.md exactly. Index the codebase with
+        rgctl, gather requirements into
+        mig-prompt-workspace/migration-prompt.md, then produce
+        mig-plan-workspace/tasks.md and mig-plan-workspace/UserStory.md.
+    - name: execute
+      agentRef: migiq-executor
+      instructions: >-
+        Load the mig-execute skill and follow its SKILL.md. Read
+        mig-plan-workspace/tasks.md, mig-plan-workspace/UserStory.md, and
+        mig-prompt-workspace/migration-prompt.md. Load the mig-rgctl skill
+        and use it throughout execution for impact analysis (blast-radius,
+        callers) before changing a symbol other steps depend on; if the
+        rgctl index is missing or stale, re-run discover rather than
+        skipping the check. Prefer the rgctl skill's command syntax over
+        mig-rgctl's references/workflow.md examples if they conflict --
+        some of mig-rgctl's GQL recipes predate the current rgctl CLI and
+        are rejected by it. Execute the migration tasks, then load the
+        mig-test-gen skill to generate tests for the changes. Write
+        mig-execute-workspace/EXECUTION_REPORT.md and
+        mig-execute-workspace/execution-log.md.
+    - name: containerize
+      agentRef: migiq-containerizer
+      instructions: >-
+        Load the mig-containerize skill and follow its SKILL.md to
+        containerize the migrated application for OpenShift. Load the
+        mig-rgctl skill first to confirm the rgctl index exists (re-run
+        discover if not) before using it for dependency and containerization-
+        blocker analysis. Prefer the rgctl skill's command syntax over
+        mig-rgctl's or mig-containerize's own GQL examples if they conflict.
+        Write Dockerfile, all manifests, and CONTAINERIZATION_REPORT.md to the
+        repo root.
+    - name: deploy
+      agentRef: migiq-deployer
+      instructions: >-
+        Load the mig-deploy skill and follow its SKILL.md. Read Dockerfile,
+        deployment.yaml, and the other manifests from the repo root, and
+        CONTAINERIZATION_REPORT.md for external dependencies. If an rgctl
+        index is available (via the mig-rgctl skill; re-run discover if
+        missing), use it to identify controller/API endpoints for
+        post-deploy testing, preferring the rgctl skill's command syntax
+        over mig-deploy's own GQL examples if they conflict. Deploy to the
+        target OpenShift cluster.
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: AgentWorkflowRun
+metadata:
+  name: migiq-migration-multistage-__TIMESTAMP__
+spec:
+  workflowRef: migiq-migration-multistage
+  gateway: enmaas-glm
+  env:
+    - name: HUB_BASE_URL
+      value: "http://host.containers.internal:8080"
+    - name: HUB_TOKEN
+      value: "__HUB_TOKEN__"
+    - name: HUB_TOKEN_ID
+      value: "__HUB_TOKEN_ID__"
+    - name: APP_ID
+      value: "__APP_ID__"
+    - name: TARGET_BRANCH
+      value: "konveyor/migration-__TIMESTAMP__"
