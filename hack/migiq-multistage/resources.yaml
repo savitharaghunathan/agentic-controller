@@ -1,0 +1,163 @@
+# Shared resources for the migIQ multistage test in Kind.
+# Creates: Gateway (used by workflow-resources.yaml), the migIQ SkillCards
+# (sourced from Dylan's deploy-migiq-agentic.sh SKILLS array, same image/
+# subPath/version/tags/description per entry).
+#
+# Usage:
+#   hack/migiq-multistage/setup.sh
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: Gateway
+metadata:
+  name: enmaas-glm
+spec:
+  provider: anthropic
+  endpoint: "https://api.enmaas.devshift.net"
+  credentialRef:
+    secretName: enmaas-credentials
+    key: api-key
+  model:
+    name: rits/zai-org/glm-5-3
+    contextWindow: 1000000
+    tier: premium
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: migiq
+spec:
+  image: quay.io/dymurray/migiq-skills:latest
+  subPath: migiq
+  displayName: MigIQ Orchestrator
+  version: "0.2.3"
+  description: Complete end-to-end application migration orchestrator (analysis, requirements, planning, execution, reporting).
+  type: skill
+  tags: [migration, orchestrator, migiq]
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: mig-rgctl
+spec:
+  image: quay.io/dymurray/migiq-skills:latest
+  subPath: mig-rgctl
+  displayName: MigIQ Code Graph Analysis
+  version: "0.2.3"
+  description: MigIQ-specific code knowledge-graph analysis using rgctl (index, validate, query structure per migration phase).
+  type: skill
+  tags: [migration, analysis, rgctl]
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: mig-prompt-builder
+spec:
+  image: quay.io/dymurray/migiq-skills:latest
+  subPath: mig-prompt-builder
+  displayName: MigIQ Requirements / Prompt Builder
+  version: "0.2.3"
+  description: Builds comprehensive, standardized migration prompts from requirements and rgctl output.
+  type: skill
+  tags: [migration, requirements]
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: mig-plan
+spec:
+  image: quay.io/dymurray/migiq-skills:latest
+  subPath: mig-plan
+  displayName: MigIQ Planning
+  version: "0.2.3"
+  description: Creates comprehensive migration plans (spec, design, task breakdown, user stories).
+  type: skill
+  tags: [migration, planning]
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: mig-execute
+spec:
+  image: quay.io/dymurray/migiq-skills:latest
+  subPath: mig-execute
+  displayName: MigIQ Execution
+  version: "0.2.3"
+  description: Executes migration plans with task execution, progress tracking, and failure recovery.
+  type: skill
+  tags: [migration, execution]
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: mig-test-gen
+spec:
+  image: quay.io/dymurray/migiq-skills:latest
+  subPath: mig-test-gen
+  displayName: MigIQ Test Generation
+  version: "0.2.3"
+  description: Generates prioritized test suites based on rgctl knowledge-graph analysis.
+  type: skill
+  tags: [migration, testing]
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: mig-containerize
+spec:
+  image: quay.io/dymurray/migiq-skills:latest
+  subPath: mig-containerize
+  displayName: MigIQ Containerize
+  version: "0.2.3"
+  description: Containerizes applications for OpenShift using Red Hat UBI images.
+  type: skill
+  tags: [migration, containers, openshift]
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: mig-deploy
+spec:
+  image: quay.io/dymurray/migiq-skills:latest
+  subPath: mig-deploy
+  displayName: MigIQ Deploy
+  version: "0.2.3"
+  description: Deploys containerized applications to OpenShift with dependency management and verification.
+  type: skill
+  tags: [migration, deploy, openshift]
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: rgctl
+spec:
+  image: quay.io/dymurray/migiq-skills:latest
+  subPath: rgctl
+  displayName: rgctl Code Graph
+  version: "0.4.20"
+  description: Answer structural questions about a codebase using the rgctl CLI graph (architecture, communities, blast radius, data-flow, CPG, semantic search, roadmap).
+  type: skill
+  tags: [analysis, rgctl]
+
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: rgctl-review
+spec:
+  image: quay.io/dymurray/migiq-skills:latest
+  subPath: rgctl-review
+  displayName: rgctl Review
+  version: "0.4.20"
+  description: Code review workflows backed by the rgctl knowledge graph.
+  type: skill
+  tags: [analysis, review, rgctl]
